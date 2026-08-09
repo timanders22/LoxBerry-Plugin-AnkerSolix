@@ -54,8 +54,12 @@ for f in ankersolix.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
     if [ -f "$BK" ]; then
-        INHALT=$(cat "$CF" 2>/dev/null)
-        if [ ! -s "$CF" ] || [ "$INHALT" = "{}" ]; then
+        # Nicht auf "{}" vergleichen, sondern fragen, ob ueberhaupt ein
+        # Schluessel drinsteht. Ein Textvergleich haengt daran, ob der
+        # Schreiber Einrueckung oder Leerzeichen setzt - und das entscheidet
+        # dann darueber, ob die Sicherung zurueckkommt oder der Nutzer seine
+        # Einstellungen verliert.
+        if [ ! -s "$CF" ] || ! grep -q '"' "$CF" 2>/dev/null; then
             cp -p "$BK" "$CF" && echo "<OK> $f aus Sicherung wiederhergestellt."
         fi
     fi
@@ -111,10 +115,26 @@ fi
 "$VENV/bin/python3" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || \
     echo "<INFO> pip liess sich nicht aktualisieren - wird mit der vorhandenen Fassung versucht."
 
+# Auf 32-Bit-ARM (aeltere Raspberry Pi) gibt es fuer manche Abhaengigkeiten
+# kein fertiges Wheel; pip uebersetzt dann selbst und braucht dafuer einen
+# C-Uebersetzer. Fehlt er, bricht die Installation mit einer Fehlerwand ab, in
+# der die eigentliche Ursache untergeht. Deshalb vorher nachsehen und es
+# benennen - abgebrochen wird nicht, denn mit --prefer-binary geht es auf den
+# meisten Geraeten trotzdem.
+BOGEN=$(dpkg --print-architecture 2>/dev/null || uname -m)
+if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+    echo "<INFO> Architektur $BOGEN, aber kein C-Uebersetzer vorhanden."
+    echo "<INFO> Sollte die naechste Zeile mit einem Uebersetzungsfehler abbrechen,"
+    echo "<INFO> hilft:  sudo apt install build-essential python3-dev"
+fi
+
 echo "<INFO> Installiere anker-solix-api $LIBTAG (benoetigt eine Internetverbindung) ..."
-if ! "$VENV/bin/python3" -m pip install --no-cache-dir "$LIBURL"; then
+# --prefer-binary: lieber ein fertiges Wheel als selbst uebersetzen. Auf
+# 32-Bit-ARM (aeltere Raspberry Pi) fehlen fuer manche Abhaengigkeiten die
+# vorgebauten Pakete, und ohne Uebersetzer bricht die Installation ab.
+if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary "$LIBURL"; then
     echo "<INFO> Feste Fassung $LIBTAG nicht installierbar - versuche den Hauptzweig."
-    if ! "$VENV/bin/python3" -m pip install --no-cache-dir \
+    if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary \
         "git+https://github.com/thomluther/anker-solix-api.git@main"; then
         echo "<FAIL> anker-solix-api konnte nicht installiert werden."
         echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, kein git installiert"

@@ -173,7 +173,9 @@ function ak_zugang_speichern($email, $passwort)
                       : (isset($alt['passwort']) ? $alt['passwort'] : ''),
     );
     $json = json_encode($neu, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    $ok = @file_put_contents($p['zugang'], $json) !== false;
+    // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
+    // schriebe dann eine LEERE Datei - hier waeren das die Zugangsdaten.
+    $ok = $json !== false && @file_put_contents($p['zugang'], $json) !== false;
     @chmod($p['zugang'], 0600);
     return $ok;
 }
@@ -544,7 +546,19 @@ function ak_vorlage($nummer = 1)
         $cmds[] = array(
             'title'   => 'ANKER_' . $nummer . '_' . $feld,
             'comment' => $bedeutung . ($info[0] !== '' ? ' [' . $info[0] . ']' : ''),
-            'check'   => '\i' . $feld . '=\i\v',
+            // Das Semikolon gehoert ins Muster, und zwar zwingend.
+            //
+            // Loxone sucht die Zeichenkette WOERTLICH und nimmt den ersten
+            // Treffer. Ohne fuehrendes Semikolon findet "LADEN=" auch die
+            // Stelle in "ENTLADEN=" - dass es heute stimmt, liegt nur daran,
+            // dass LADEN in der Zeile zufaellig vor ENTLADEN steht. Faellt
+            // LADEN einmal weg oder wechselt die Reihenfolge, stuende die
+            // Entladeleistung im Ladeeingang. Ein falscher Wert ist schlimmer
+            // als ein fehlender.
+            //
+            // In der Statuszeile geht jedem Feld ein Semikolon voran
+            // (ANKER;OK=1;SOC=...), das Muster passt also unveraendert.
+            'check'   => '\i;' . $feld . '=\i\v',
         );
     }
     $adresse = 'http://' . $host . '/plugins/' . $p['plugin']

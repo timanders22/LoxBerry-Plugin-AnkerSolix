@@ -1,34 +1,61 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Anker SOLIX - Plugin-Symbol.
-     Hausstandard: runde Scheibe in LoxBerry-Gruen #6dac20, Motiv am echten
-     Geraet orientiert. Die Solarbank ist ein aufrecht stehender, schmaler
-     Quader mit stark abgerundeten Kanten und einem Bedienfeld oben.
-     Bewusst KEINE fremden Wortmarken oder Logos, auch nicht angedeutet. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <circle cx="256" cy="256" r="256" fill="#6dac20"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
 
-  <!-- Speicherturm -->
-  <rect x="176" y="118" width="160" height="288" rx="34" ry="34"
-        fill="#ffffff" opacity="0.96"/>
-  <rect x="176" y="118" width="160" height="288" rx="34" ry="34"
-        fill="none" stroke="#3d6412" stroke-width="10"/>
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
 
-  <!-- Fuellstand: unterer Teil gefuellt -->
-  <path d="M186 262 h140 v110 a24 24 0 0 1 -24 24 h-92 a24 24 0 0 1 -24 -24 z"
-        fill="#6dac20" opacity="0.55"/>
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- Battery Tower Outer Casing -->
+    <rect x="181" y="70" width="150" height="230" rx="20" fill="#ffffff" />
+    
+    <!-- Feet / Stands -->
+    <rect x="193" y="300" width="30" height="12" rx="4" fill="#ffffff" />
+    <rect x="289" y="300" width="30" height="12" rx="4" fill="#ffffff" />
 
-  <!-- Bedienfeld -->
-  <rect x="206" y="150" width="100" height="16" rx="8" ry="8" fill="#3d6412"/>
-  <circle cx="256" cy="196" r="13" fill="#3d6412"/>
+    <!-- Top Display Panel cutout -->
+    <rect x="195" y="88" width="122" height="26" rx="6" fill="#6dac20" />
+    <circle cx="256" cy="101" r="8" fill="#ffffff" />
 
-  <!-- Trennfuge zwischen Ober- und Unterteil -->
-  <line x1="186" y1="262" x2="326" y2="262" stroke="#3d6412" stroke-width="7"/>
+    <!-- Modular Battery Layer Lines -->
+    <line x1="191" y1="165" x2="321" y2="165" stroke="#6dac20" stroke-width="4" />
+    <line x1="191" y1="215" x2="321" y2="215" stroke="#6dac20" stroke-width="4" />
 
-  <!-- Blitz als Sinnbild fuer die Energieabgabe -->
-  <path d="M268 288 l-40 62 h30 l-14 52 46 -70 h-30 z" fill="#ffffff"
-        stroke="#3d6412" stroke-width="7" stroke-linejoin="round"/>
+    <!-- Lightning Bolt Icon Cutout -->
+    <polygon points="262,172 238,200 254,200 248,235 274,205 258,205" fill="#6dac20" />
 
-  <!-- Standfuesse -->
-  <rect x="196" y="406" width="34" height="16" rx="6" ry="6" fill="#3d6412"/>
-  <rect x="282" y="406" width="34" height="16" rx="6" ry="6" fill="#3d6412"/>
+    <!-- Solar Energy Sun (Top Right) -->
+    <g transform="translate(370, 125)">
+      <circle cx="0" cy="0" r="18" fill="#ffffff" />
+      <line x1="0" y1="-26" x2="0" y2="-36" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="0" y1="26" x2="0" y2="36" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="-26" y1="0" x2="-36" y2="0" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="26" y1="0" x2="36" y2="0" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="-18" y1="-18" x2="-25" y2="-25" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="18" y1="18" x2="25" y2="25" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="18" y1="-18" x2="25" y2="-25" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <line x1="-18" y1="18" x2="-25" y2="25" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+    </g>
+
+    <!-- Smart Energy Waves (Left) -->
+    <path d="M 156 160 A 25 25 0 0 0 156 210" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" />
+    <path d="M 144 148 A 42 42 0 0 0 144 222" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.75" />
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="256" y="380" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="22" letter-spacing="2">ANKER SOLIX</text>
+  <text x="256" y="425" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="38" letter-spacing="3">LOXBERRY</text>
 </svg>

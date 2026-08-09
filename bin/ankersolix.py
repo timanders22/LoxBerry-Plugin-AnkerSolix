@@ -65,6 +65,53 @@ ORDNER_BEFEHLE = PDATA / "befehle"
 ORDNER_ANTWORTEN = PDATA / "antworten"
 DATEI_LOG = PLOG / "ankersolix.log"
 
+# Hoechstalter einer Befehlsdatei in Sekunden. Aelteres wird verworfen statt
+# ausgefuehrt - siehe warteschlange().
+BEFEHL_HOECHSTALTER = 60
+
+
+def zeitzone_setzen() -> str:
+    """Zeitzone aus der LoxBerry-Einstellung uebernehmen.
+
+    Die Verlaufsdateien tragen das Datum im Namen (anlageN_JJJJMMTT.csv) und
+    entstehen ueber time.strftime(). Ohne gesetzte Zeitzone nimmt Python die
+    des Systems - und laeuft das Grundsystem auf UTC, wechselt die Datei im
+    Sommer schon um 22 Uhr Ortszeit. Der Tagesverlauf waere dann quer zum
+    Sonnenverlauf geteilt, und niemand faende den Grund.
+
+    Genommen wird, was der Nutzer in LoxBerry eingestellt hat - nicht fest
+    Europe/Berlin: das Plugin laeuft auch anderswo.
+    """
+    tz = os.environ.get("TZ") or ""
+    if not tz:
+        try:
+            with open(LBHOME / "config" / "system" / "general.json", encoding="utf-8") as fh:
+                gen = json.load(fh)
+            for ab in ("Timeserver", "TIMESERVER", "Base", "BASE"):
+                wert = (gen.get(ab) or {}).get("Timezone") or (gen.get(ab) or {}).get("TIMEZONE")
+                if wert:
+                    tz = str(wert)
+                    break
+        except (OSError, ValueError, AttributeError):
+            tz = ""
+    if not tz:
+        # Letzter Rueckfall: was das Grundsystem in /etc/timezone fuehrt.
+        try:
+            with open("/etc/timezone", encoding="utf-8") as fh:
+                tz = fh.read().strip()
+        except OSError:
+            tz = ""
+    if tz:
+        os.environ["TZ"] = tz
+        try:
+            time.tzset()
+        except AttributeError:
+            pass    # Windows kennt tzset nicht - dort laeuft das Plugin ohnehin nicht
+    return tz
+
+
+ZEITZONE = zeitzone_setzen()
+
 VORGABEN = {
     "land": "DE",
     "intervall": 60,
@@ -229,7 +276,12 @@ def mqtt_senden(paare: dict, praefix: str) -> None:
         for k, v in paare.items():
             if v is None:
                 continue
-            nachricht = f"publish {praefix}/{k} {v}".encode("utf-8")
+            # Zeilenumbrueche zerreissen die Syntax des UDP-Gateways: es
+            # liest Zeile fuer Zeile, ein \n im Wert waere also der Anfang
+            # eines neuen Befehls. Fehlertexte aus der Anker-Cloud koennen
+            # mehrzeilig sein - genau die landen hier.
+            sauber = str(v).replace("\r", " ").replace("\n", " ").strip()
+            nachricht = f"publish {praefix}/{k} {sauber}".encode("utf-8")
             s.sendto(nachricht, ("127.0.0.1", z["udpport"]))
     except OSError as err:
         melde_gebremst("mqtt_senden", f"MQTT: Senden fehlgeschlagen ({err}).")
@@ -561,12 +613,33 @@ async def warteschlange(api, cfg: dict) -> bool:
     for datei in sorted(ORDNER_BEFEHLE.glob("*.json")):
         b = json_lesen(datei)
         kennung = datei.stem
+        # Alter VOR dem Loeschen merken.
+        try:
+            alter = time.time() - datei.stat().st_mtime
+        except OSError:
+            alter = 0.0
         try:
             datei.unlink()
         except OSError:
             pass
         if not b:
             antwort_schreiben(kennung, 0, "Befehlsdatei war leer oder unlesbar.")
+            continue
+
+        # Veraltete Befehle werden verworfen, nicht ausgefuehrt.
+        #
+        # Die Befehle legt die Oberflaeche als Dateien ab; abgearbeitet werden
+        # sie vom Dienst. Stand der Dienst zwischendurch still - Cloud gesperrt,
+        # Absturz, Update -, dann liegen beim Neustart Befehle von vor Stunden
+        # da. Eine Hauslast von heute Vormittag jetzt an die Solarbank zu
+        # schicken, ist schlimmer als sie gar nicht zu schicken: es greift
+        # unerwartet in die Speicherlogik ein, und niemand versteht, warum.
+        if alter > BEFEHL_HOECHSTALTER:
+            antwort_schreiben(kennung, 0,
+                              f"Befehl war {int(alter)} s alt und wurde verworfen "
+                              f"(Grenze {BEFEHL_HOECHSTALTER} s). Bitte erneut ausloesen.")
+            _LOG.warning("Befehl %s (%s) verworfen: %d s alt.",
+                         kennung, b.get("aktion"), int(alter))
             continue
         try:
             ok, meldung, zusatz = await befehl_ausfuehren(api, cfg, b)
@@ -672,25 +745,58 @@ async def dienst(einmal: bool = False) -> int:
 
         zyklus = 0
         fehler_folge = 0
+        # Zeitpunkt des letzten ERFOLGREICHEN Abrufs je Gruppe.
+        #
+        # Frueher haing das an einem Modulo-Zaehler: if zyklus % takt == 0.
+        # Schlug die Cloud genau in diesem Zyklus fehl - ein HTTP 429 genuegt -,
+        # wurde der Zaehler am Schleifenende trotzdem hochgezaehlt, und die
+        # Energiedaten kamen erst einen ganzen Block spaeter wieder dran. Bei
+        # takt_energie 15 sind das 15 verlorene Durchlaeufe wegen eines
+        # einzigen Aussetzers. Mit Zeitstempeln wird beim naechsten
+        # gelungenen Durchlauf sofort nachgeholt.
+        letzte_details = 0.0
+        letzte_energie = 0.0
         while _LAUF:
             cfg = config()  # Aenderungen aus der Oberflaeche ohne Neustart uebernehmen
             ok = 0
             fehler = ""
+            teilfehler = []
+            jetzt = time.time()
+
+            # JEDER Abruf mit eigenem try. Frueher lagen alle drei in einem
+            # gemeinsamen Block: schlug die Detailabfrage fehl, obwohl
+            # update_sites() gerade frische Werte geliefert hatte, sprang das
+            # Skript in den except-Zweig, ok blieb 0 - und Loxone verwarf die
+            # gueltigen Werte gleich mit. Ein Teilausfall darf nicht alles
+            # entwerten.
             try:
                 await api.update_sites()
-                if zyklus % cfg["takt_details"] == 0:
+                ok = 1
+                fehler_folge = 0
+            except Exception as err:  # noqa: BLE001
+                teilfehler.append(f"Anlagen: {fehlertext(err)}")
+                fehler_folge += 1
+
+            if ok and (jetzt - letzte_details) >= cfg["takt_details"] * cfg["intervall"]:
+                try:
                     # Reihenfolge ist vorgegeben: Geraetedetails zuerst, sie
                     # legen bei Einzelgeraeten erst die virtuellen Anlagen an.
                     await api.update_device_details()
                     await api.update_site_details()
-                if zyklus % cfg["takt_energie"] == 0:
+                    letzte_details = jetzt
+                except Exception as err:  # noqa: BLE001
+                    teilfehler.append(f"Details: {fehlertext(err)}")
+
+            if ok and (jetzt - letzte_energie) >= cfg["takt_energie"] * cfg["intervall"]:
+                try:
                     await api.update_device_energy()
-                ok = 1
-                fehler_folge = 0
-            except Exception as err:  # noqa: BLE001
-                fehler = fehlertext(err)
-                fehler_folge += 1
-                melde_gebremst("abruf", f"Abruf fehlgeschlagen: {fehler}", 900)
+                    letzte_energie = jetzt
+                except Exception as err:  # noqa: BLE001
+                    teilfehler.append(f"Energie: {fehlertext(err)}")
+
+            if teilfehler:
+                fehler = "; ".join(teilfehler)
+                melde_gebremst("abruf", f"Abruf unvollstaendig: {fehler}", 900)
 
             abbild_schreiben(api, cfg, ok, fehler)
             zustand_schreiben(ok=ok, fehler=fehler, zyklus=zyklus, fehler_folge=fehler_folge,
@@ -784,6 +890,14 @@ def selbsttest() -> int:
         zeilen.append(f"[FEHL] Zugangsdatei fehlt: {DATEI_ZUGANG}")
 
     c = config()
+    # Zeitzone sichtbar machen: die Verlaufsdateien tragen das Datum im Namen,
+    # und ein Grundsystem auf UTC teilt den Tag im Sommer schon um 22 Uhr.
+    if ZEITZONE:
+        zeilen.append(f"[OK]   Zeitzone {ZEITZONE}, jetzt ist {time.strftime('%d.%m.%Y %H:%M')}")
+    else:
+        zeilen.append(f"[INFO] Keine Zeitzone ermittelt - es gilt die des Grundsystems. "
+                      f"Jetzt ist {time.strftime('%d.%m.%Y %H:%M')}; stimmt das nicht, "
+                      f"teilt der Verlauf den Tag an der falschen Stelle.")
     zeilen.append(f"[INFO] Takt {c['intervall']} s, Details alle {c['takt_details']} Takte, "
                   f"Energie alle {c['takt_energie']} Takte, Land {c['land']}")
     zeilen.append(f"[INFO] Schreibende Befehle: {'zugelassen' if c.get('steuerung_ein') else 'gesperrt'}, "

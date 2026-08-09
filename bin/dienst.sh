@@ -7,7 +7,14 @@
 # gestartet, kommt dort ueberall Leerstring zurueck - das Skript werkelt dann
 # gegen /-Pfade und meldet trotzdem Erfolg.
 
-SELF=$(cd "$(dirname "$0")" && pwd)          # <home>/bin/plugins/<ordner>
+# readlink -f loest Symlinks auf. Derzeit legt dieses Plugin keinen an - es
+# bringt keinen daemon/-Ordner mit, den LoxBerry verlinken wuerde. Aber der
+# Pfad ist die Identitaet dieses Skripts: aus ihm kommen Plugin-Name, Daten-,
+# Log- und Konfigurationsverzeichnis. Wird es irgendwann doch ueber einen
+# Symlink aufgerufen, waere PNAME der Name des VERLINKENDEN Ordners, und der
+# Dienst schriebe seine Daten woanders hin - ohne Fehlermeldung. Zwei Woerter
+# Vorsorge gegen einen Fehler, den man erst bemerkt, wenn Werte fehlen.
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # <home>/bin/plugins/<ordner>
 PNAME=$(basename "$SELF")
 LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
