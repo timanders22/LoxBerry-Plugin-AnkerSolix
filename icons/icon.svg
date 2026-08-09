@@ -55,7 +55,10 @@
     <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
   </g>
 
-  <!-- Typography -->
-  <text x="256" y="380" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="22" letter-spacing="2">ANKER SOLIX</text>
-  <text x="256" y="425" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="38" letter-spacing="3">LOXBERRY</text>
+  <!-- Typography
+       ZUR SCHRIFTGROESSE: 29 px fuer den Plugin-Namen, 20 px fuer LOXBERRY -
+       einheitlich ueber alle Plugins. Massgeblich fuer den Rand ist die
+       UNTERSTE Bildzeile der Schrift, dort ist der Kreis am schmalsten. -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="29" letter-spacing="1">ANKER SOLIX</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
 </svg>
