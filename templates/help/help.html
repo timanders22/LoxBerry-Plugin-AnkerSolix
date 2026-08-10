@@ -1,52 +1,27 @@
-<h2>Anker SOLIX</h2>
+<h2><TMPL_VAR HILFE.K01></h2>
 
-<p>Bindet Anker-SOLIX-Ger&auml;te an Loxone an: Solarbank E1600 (Gen 1),
-Solarbank 2 (Plus, Pro, AC), Solarbank 3 E2700, Smart Meter, MI80-Wechselrichter,
-Smart Plugs, Powerstations, Power Panel und X1.</p>
+<p><TMPL_VAR HILFE.K02></p>
 
-<h3>Warum &uuml;ber die Cloud?</h3>
-<p>Anker SOLIX hat <b>keine lokale Schnittstelle.</b> Weder die Solarbank noch
-der Smart Meter beantworten Anfragen aus dem Heimnetz; alle Werte laufen &uuml;ber
-die Anker-Cloud. Deshalb braucht das Plugin Ihre Anker-Zugangsdaten. Sie liegen
-in einer eigenen Datei mit den Rechten 0600 und stehen nie in der
-Loxone-Projektdatei.</p>
-<p>Seit Juli 2025 darf dasselbe Konto parallel in der App und in weiteren
-Programmen angemeldet sein. Ein zweites, geteiltes Konto ist nicht mehr
-n&ouml;tig.</p>
+<h3><TMPL_VAR HILFE.K03></h3>
+<p><TMPL_VAR HILFE.K04></p>
+<p><TMPL_VAR HILFE.K05></p>
 
-<h3>So gehen Sie vor</h3>
+<h3><TMPL_VAR HILFE.K06></h3>
 <ol>
-<li><b>Einstellungen:</b> Anker-Benutzername, Passwort und L&auml;nderk&uuml;rzel
-eintragen, speichern, dann <i>Dienst starten</i>.</li>
-<li><b>Test:</b> Die Selbstpr&uuml;fung sagt Zeile f&uuml;r Zeile, ob es
-tr&auml;gt. Jedes Kreuz nennt die Abhilfe mit.</li>
-<li><b>MQTT:</b> Das Abo im MQTT-Gateway eintragen. Ohne diesen Eintrag kommt am
-Miniserver nichts an.</li>
-<li><b>Einbindung in Loxone:</b> Schritt f&uuml;r Schritt, mit vollst&auml;ndiger
-Baustein-Liste zum Nachbauen.</li>
+<li><TMPL_VAR HILFE.K07></li>
+<li><TMPL_VAR HILFE.K08></li>
+<li><TMPL_VAR HILFE.K09></li>
+<li><TMPL_VAR HILFE.K10></li>
 </ol>
 
-<h3>Anfragegrenzen</h3>
-<p>Die Anker-Cloud drosselt: die Energiestatistik vertr&auml;gt etwa zehn bis
-zw&ouml;lf Abfragen je Minute, danach antwortet sie mit HTTP 429. Ein Takt unter
-60 Sekunden bringt ohnehin nichts, weil das Ger&auml;t die Cloud selbst nur
-ein- bis alle f&uuml;nf Minuten auffrischt.</p>
+<h3><TMPL_VAR HILFE.K11></h3>
+<p><TMPL_VAR HILFE.K12></p>
 
-<h3>Steuerung</h3>
-<p>Schreibende Befehle (Hauslast, Betriebsart, Entladegrenze) sind ab Werk
-gesperrt und m&uuml;ssen ausdr&uuml;cklich freigegeben werden. Anders als beim
-Marstek-Speicher gibt es <b>keinen Watchdog</b>: ein gesetzter Sollwert bleibt
-stehen, auch wenn Loxone ausf&auml;llt.</p>
+<h3><TMPL_VAR HILFE.K13></h3>
+<p><TMPL_VAR HILFE.K14></p>
 
-<h3>Was ungepr&uuml;ft ist</h3>
-<p>Dieses Plugin wurde ohne Anker-Konto und ohne Ger&auml;t gebaut. Die
-Feldnamen der Cloud-Antwort und die Wirkung der schreibenden Befehle konnten
-deshalb nicht am lebenden System nachgemessen werden. Bleibt ein Wert leer, ist
-das eher ein falsch geratener Feldname als eine St&ouml;rung: der Knopf
-<i>Rohdaten als JSON ansehen</i> im Reiter Test zeigt, wie die Felder bei Ihnen
-wirklich heissen.</p>
+<h3><TMPL_VAR HILFE.K15></h3>
+<p><TMPL_VAR HILFE.K16></p>
 
-<h3>Grundlage</h3>
-<p>Die Cloud-Anbindung nutzt die Bibliothek <i>anker-solix-api</i> von
-thomluther (MIT). Sie ist keine amtliche Anker-Schnittstelle und kann sich
-jederzeit &auml;ndern.</p>
+<h3><TMPL_VAR HILFE.K17></h3>
+<p><TMPL_VAR HILFE.K18></p>

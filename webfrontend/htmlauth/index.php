@@ -459,7 +459,7 @@ if ($ak_rahmen) {
 </div>
 
 <div class="sm-knopfreihe">
-  <button data-role="none" class="sm-btn sm-b-lesen" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
 </div>
 </form>
 
