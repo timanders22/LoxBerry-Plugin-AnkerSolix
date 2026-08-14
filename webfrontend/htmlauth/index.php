@@ -112,15 +112,14 @@ if ($ak_post && isset($_POST['speichern'])) {
         $ak_fehler[] = ak_t('EINST.FEHLER_HAUSLAST_TAUSCH');
     }
 
-    $ak_cfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     $ak_cfg['steuerung_ein'] = isset($_POST['steuerung_ein']) ? 1 : 0;
 
-    $ak_topic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['mqtt_topic']));
-    if ($ak_topic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $ak_topic)) {
-        $ak_fehler[] = ak_t('EINST.FEHLER_TOPIC');
-    } else {
-        $ak_cfg['mqtt_topic'] = trim($ak_topic, '/');
-    }
+    /* mqtt_ein und mqtt_topic werden hier bewusst NICHT angefasst: sie
+     * wohnen im Reiter MQTT und haben dort ein eigenes Formular. $ak_cfg
+     * kommt aus ak_config(), die beiden Werte ueberleben also unveraendert.
+     * Stuende hier weiter "isset($_POST['mqtt_ein']) ? 1 : 0", wuerde jedes
+     * Speichern der Einstellungen MQTT stillschweigend abschalten - genau
+     * diese Falle kostete am 13.08.2026 drei Plugins ihr Aktionstoken. */
 
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
      * Passwortfeld loescht nichts - sonst stuende irgendwann ein leeres
@@ -147,6 +146,33 @@ if ($ak_post && isset($_POST['speichern'])) {
         }
     }
     $ak_tab = 'tab-settings';
+}
+
+/* ---------------- MQTT (eigener Reiter, eigenes Formular) ----------------
+ *
+ * Eigenes Formular UND eigener Handler gehoeren zusammen. Wuerden beide
+ * Formulare denselben Handler ausloesen, setzte dieser die Haken des jeweils
+ * nicht abgeschickten Formulars per isset() auf 0 - der Benutzer verliert
+ * Werte, die er nie gesehen hat. Der Handler laedt darum den Bestand und
+ * ruehrt ausschliesslich die beiden MQTT-Werte an. */
+if ($ak_post && isset($_POST['save_mqtt'])) {
+    $ak_cfg = ak_config();
+    $ak_cfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    $ak_topic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
+        (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
+    if ($ak_topic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $ak_topic)) {
+        $ak_fehler[] = ak_t('EINST.FEHLER_TOPIC');
+    } else {
+        $ak_cfg['mqtt_topic'] = trim($ak_topic, '/');
+    }
+    if (!$ak_fehler) {
+        if (ak_config_speichern($ak_cfg)) {
+            $ak_meldungen[] = ak_t('EINST.GESPEICHERT');
+        } else {
+            $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_SPEICHERN'), $ak_p['config']);
+        }
+    }
+    $ak_tab = 'tab-mqtt';
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
@@ -445,18 +471,8 @@ if ($ak_rahmen) {
   <div class="sm-hilfe"><?= ak_t('EINST.H_WARTEZEIT') ?></div>
 </div>
 
-<h2>MQTT</h2>
-<div class="sm-feld">
-  <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($ak_cfg['mqtt_ein']) ? 'checked' : '' ?>>
-    <?= ak_e(ak_t('EINST.L_MQTT_EIN')) ?>
-  </label>
-</div>
-<div class="sm-feld">
-  <label for="mqtt_topic"><?= ak_e(ak_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= ak_e($ak_cfg['mqtt_topic']) ?>" placeholder="ankersolix">
-  <div class="sm-hilfe"><?= ak_t('EINST.H_MQTT_TOPIC') ?></div>
-</div>
+<?php /* MQTT stand bis 0.9.4 hier. Es wohnt jetzt vollstaendig im Reiter
+         MQTT - eine Sache, eine Stelle. */ ?>
 
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
@@ -488,6 +504,28 @@ if ($ak_rahmen) {
 
 <!-- ================= Reiter: MQTT ================= -->
 <div class="sm-seite" id="tab-mqtt">
+
+<h2><?= ak_e(ak_t('EINST.H_MQTT')) ?></h2>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="save_mqtt" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($ak_cfg['mqtt_ein']) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('EINST.L_MQTT_EIN')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label for="mqtt_topic"><?= ak_e(ak_t('EINST.L_MQTT_TOPIC')) ?></label>
+  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= ak_e($ak_cfg['mqtt_topic']) ?>" placeholder="ankersolix">
+  <div class="sm-hilfe"><?= ak_t('EINST.H_MQTT_TOPIC') ?></div>
+</div>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span></div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
+
 <h2><?= ak_e(ak_t('MQTT.H_ZUSTAND')) ?></h2>
 <p class="sm-hilfe"><?= ak_t('MQTT.GATEWAY_ERKLAERUNG') ?></p>
 
