@@ -23,6 +23,18 @@ PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
 LOGDATEI="$PLOG/ankersolix.log"
+# Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
+# Starts und alles, was das Python-Skript nach stderr schreibt, bevor sein
+# Protokoll steht (Syntaxfehler, fehlende Bibliothek, Abbruch im Importpfad).
+#
+# Bis 0.9.6 ging diese Ausgabe mit ">> $LOGDATEI" in DIESELBE Datei, die
+# ankersolix.py mit einem RotatingFileHandler fuehrt. Beim Ueberlauf benennt
+# der Handler die Datei um und legt eine neue an - der Anhaenge-Deskriptor
+# dieser Shell zeigt danach weiter auf die WEGGESCHOBENE Datei. Die
+# Startmeldungen landen ab da in einer Datei, die niemand mehr ansieht, und
+# die Groessenkappung greift fuer sie gar nicht mehr.
+# Regel: genau einer schreibt in eine Protokolldatei.
+STARTLOG="$PLOG/ankersolix_start.log"
 PY="$SELF/venv/bin/python3"
 SKRIPT="$SELF/ankersolix.py"
 
@@ -52,16 +64,26 @@ starten() {
         return 1
     fi
     touch "$SOLL"
-    # Ausgabe geht in die Logdatei. Das Python-Skript protokolliert deshalb
-    # NICHT zusaetzlich nach stdout - sonst stuende jede Zeile doppelt darin.
-    nohup "$PY" "$SKRIPT" >> "$LOGDATEI" 2>&1 &
+    # Ausgabe geht in die Startdatei, NICHT in das Protokoll: dort schreibt
+    # ausschliesslich der RotatingFileHandler des Python-Skripts. Das Skript
+    # protokolliert deshalb auch nicht zusaetzlich nach stdout.
+    # Beim Start gekappt: diese Datei sammelt nur die Ausgabe EINES Laufes.
+    # Ohne Kappung waere sie der einzige Weg im Plugin, der unbegrenzt waechst.
+    : > "$STARTLOG"
+    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
     echo $! > "$PID"
     sleep 1
     if laeuft; then
         echo "gestartet (PID $(cat "$PID"))"
         return 0
     fi
-    echo "FEHLER: Start fehlgeschlagen - siehe $LOGDATEI"
+    echo "FEHLER: Start fehlgeschlagen - siehe $STARTLOG und $LOGDATEI"
+    # Die ersten Zeilen gleich mitgeben: wer den Knopf in der Oberflaeche
+    # drueckt, sieht sonst nur "Start fehlgeschlagen" und muss suchen.
+    if [ -s "$STARTLOG" ]; then
+        echo "--- $STARTLOG ---"
+        head -n 12 "$STARTLOG"
+    fi
     rm -f "$PID"
     return 1
 }
@@ -104,8 +126,18 @@ case "$1" in
         # Nur neu starten, wenn der Dienst laufen SOLL. Ein bewusst
         # angehaltener Dienst bleibt angehalten.
         if [ -f "$SOLL" ] && ! laeuft; then
+            # Zaehler VOR dem Start hochsetzen: gelingt der Start nicht,
+            # ist der Versuch trotzdem geschehen und gehoert gezaehlt.
+            # Die Oberflaeche zeigt den Stand im Reiter Test - ein Dienst,
+            # den der Waechter stuendlich aufsammelt, sieht sonst gesund aus.
+            ZAEHLER="$PDATA/waechter.txt"
+            N=$(cat "$ZAEHLER" 2>/dev/null | head -n 1)
+            case "$N" in ''|*[!0-9]*) N=0 ;; esac
+            printf '%s
+%s
+' "$((N + 1))" "$(date '+%Y-%m-%d %H:%M:%S')" > "$ZAEHLER"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
-            starten >> "$LOGDATEI" 2>&1
+            starten >> "$STARTLOG" 2>&1
         fi
         ;;
     *)

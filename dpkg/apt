@@ -1,0 +1,24 @@
+# Diese Pakete installiert LoxBerry mit "apt-get -y install" - und zwar als
+# root, waehrend der Plugin-Installation.
+#
+# WARUM DAS HIER STEHT UND NICHT IN postinstall.sh:
+# postinstall.sh laeuft als Benutzer loxberry. Ein "apt-get install" dort
+# scheitert mangels Rechten - immer, still, und mit einem Hinweistext, den
+# man leicht ueberliest. Diese Liste ist der vorgesehene Weg.
+#
+# Bis 0.9.6 gab es diese Datei nicht. postinstall.sh brach dann mit einer
+# sauberen Meldung ab und hinterliess ein installiertes, aber totes Plugin -
+# der Anwender musste beide Pakete von Hand nachziehen. Beides steht hier
+# auch dann, wenn es auf dem eigenen LoxBerry gerade zufaellig vorhanden ist
+# (REGELN_2: "Was das Plugin braucht, gehoert nach dpkg/apt").
+#
+# python3-venv  Ohne das Paket scheitert "python3 -m venv". Eine eigene venv
+#               ist Pflicht, weil Debian 12/13 die System-Python-Umgebung als
+#               extern verwaltet kennzeichnen (PEP 668) und ein systemweites
+#               pip3 install mit "externally-managed-environment" abweisen -
+#               auch mit --user, auch als root.
+# git           anker-solix-api steht NICHT auf PyPI. postinstall.sh holt die
+#               Bibliothek mit "pip install git+https://github.com/..." vom
+#               Tag v3.6.3; ohne git bricht das ab.
+python3-venv
+git

@@ -24,6 +24,7 @@ if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
 fi
 
+SELFDIR=$(cd "$(dirname "$0")" && pwd)
 PBIN="$BASE/bin/plugins/$PFOLDER"
 PDATA="$BASE/data/plugins/$PFOLDER"
 PLOG="$BASE/log/plugins/$PFOLDER"
@@ -36,7 +37,7 @@ VENV="$PBIN/venv"
 LIBTAG="v3.6.3"
 LIBURL="git+https://github.com/thomluther/anker-solix-api.git@${LIBTAG}"
 
-mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" || {
+mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten"          "$PDATA/verlauf" "$PDATA/energie" || {
     echo "<FAIL> Ordner konnten nicht angelegt werden."
     exit 1
 }
@@ -102,7 +103,11 @@ if [ "$BRAUCHBAR" -eq 0 ]; then
     rm -rf "$VENV"
     if ! "$PY" -m venv "$VENV"; then
         echo "<FAIL> Virtuelle Umgebung konnte nicht angelegt werden ($VENV)."
-        echo "<FAIL> Fehlt das Paket python3-venv? (apt install python3-venv)"
+        echo "<FAIL> Dafuer wird das Paket python3-venv gebraucht. Es steht in"
+        echo "<FAIL> dpkg/apt und wird von LoxBerry als root eingespielt - wenn"
+        echo "<FAIL> das nicht geschehen ist, war waehrend der Installation die"
+        echo "<FAIL> Paketquelle nicht erreichbar. Abhilfe von Hand:"
+        echo "<FAIL>     sudo apt-get update && sudo apt-get install python3-venv"
         exit 1
     fi
     echo "<OK> Virtuelle Umgebung angelegt: $VENV"
@@ -128,6 +133,13 @@ if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
     echo "<INFO> hilft:  sudo apt install build-essential python3-dev"
 fi
 
+if ! command -v git >/dev/null 2>&1; then
+    echo "<INFO> git ist nicht vorhanden. anker-solix-api steht NICHT auf PyPI und"
+    echo "<INFO> wird mit pip install git+https://... geholt - ohne git bricht der"
+    echo "<INFO> naechste Schritt ab. Das Paket steht in dpkg/apt; wurde es nicht"
+    echo "<INFO> eingespielt, war die Paketquelle nicht erreichbar."
+fi
+
 echo "<INFO> Installiere anker-solix-api $LIBTAG (benoetigt eine Internetverbindung) ..."
 # --prefer-binary: lieber ein fertiges Wheel als selbst uebersetzen. Auf
 # 32-Bit-ARM (aeltere Raspberry Pi) fehlen fuer manche Abhaengigkeiten die
@@ -137,8 +149,10 @@ if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary "$LIBURL"
     if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary \
         "git+https://github.com/thomluther/anker-solix-api.git@main"; then
         echo "<FAIL> anker-solix-api konnte nicht installiert werden."
-        echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, kein git installiert"
-        echo "<FAIL> (apt install git), oder GitHub war nicht erreichbar."
+        echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, GitHub nicht"
+        echo "<FAIL> erreichbar, oder git fehlt. git steht in dpkg/apt und wird von"
+        echo "<FAIL> LoxBerry als root eingespielt. Abhilfe von Hand:"
+        echo "<FAIL>     sudo apt-get update && sudo apt-get install git"
         exit 1
     fi
     # Ersatzweg gegangen - und angezeigt, sonst wird aus dem Ersatz unbemerkt
@@ -158,6 +172,13 @@ echo "<OK> anker-solix-api geladen, Fassung $LIBVER"
 # ---------- Rechte ----------
 chmod 755 "$PBIN/ankersolix.py" 2>/dev/null
 chmod 755 "$PBIN/dienst.sh" 2>/dev/null
+# ak_notify.php wird vom Dienst ueber "php <pfad>" aufgerufen, braucht also
+# kein Ausfuehrungsrecht - lesbar muss es sein.
+chmod 644 "$PBIN/ak_notify.php" 2>/dev/null
+# Das Deinstallationsskript uebernimmt LoxBerry aus dem Installationsordner.
+# Ohne Ausfuehrungsrecht bliebe die Sicherung mit dem Anker-Passwort nach dem
+# Entfernen liegen - deshalb hier, im entpackten Stand, setzen.
+chmod 755 "$SELFDIR/uninstall/uninstall" 2>/dev/null
 chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
 chmod 600 "$PCONFIG/zugang.json"
 

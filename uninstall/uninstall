@@ -1,0 +1,77 @@
+#!/bin/bash
+# Anker SOLIX - Deinstallation
+#
+# Zwei Aufgaben, beide unverzichtbar:
+#
+# 1. DIE ANLAGE FREIGEBEN. Anker kennt keinen Watchdog: ein gesetzter
+#    Hauslast-Sollwert bleibt stehen, auch wenn nie wieder jemand danach
+#    fragt. Wer das Plugin entfernt, waehrend die Solarbank auf einem
+#    gestellten Wert steht, laesst eine Anlage zurueck, die etwas tut, und
+#    niemand weiss mehr, warum. Deshalb wird - und nur dann, wenn die
+#    Steuerung ueberhaupt freigegeben war - einmal die Betriebsart
+#    "eigenverbrauch" gesendet. Genau das empfiehlt die README dem Anwender
+#    fuer das geplante Herunterfahren von Loxone.
+#
+# 2. DIE SICHERUNGEN ABRAEUMEN. plugininstall.pl entfernt nur das
+#    VERZEICHNIS config/plugins/<ordner>/. Was eine Ebene darueber liegt,
+#    bleibt - und preupgrade.sh legt dort zwei Dateien ab, eine davon mit
+#    dem Anker-Kontopasswort im Klartext. Zwei Folgen, beide unerwuenscht:
+#      a) Das Cloud-Passwort liegt unbegrenzt im Dateisystem.
+#      b) Eine spaetere NEUinstallation fand die alte Konfiguration samt
+#         altem Aktionstoken vor und stellte sie stillschweigend wieder her
+#         (ak_lib.php, ak_config). Eine "saubere" Neuinstallation war das
+#         nicht.
+SELF=$(cd "$(dirname "$0")" && pwd)
+PFOLDER=$(basename "$(cd "$SELF/.." && pwd)")
+BASE=${LBHOMEDIR:-$(cd "$SELF/../../.." 2>/dev/null && pwd)}
+
+PBIN="$BASE/bin/plugins/$PFOLDER"
+PCONFIG="$BASE/config/plugins/$PFOLDER"
+DIENST="$PBIN/dienst.sh"
+PY="$PBIN/venv/bin/python3"
+SKRIPT="$PBIN/ankersolix.py"
+
+# ---------- 1. Anlage freigeben ----------
+# Nur versuchen, wenn die Steuerung freigegeben war. War sie es nie, hat
+# dieses Plugin auch nie einen Sollwert gesetzt, und ein Schreibbefehl beim
+# Deinstallieren waere ein Eingriff ohne Anlass.
+if [ -x "$PY" ] && [ -f "$SKRIPT" ] && [ -f "$PCONFIG/ankersolix.json" ] \
+   && grep -q '"steuerung_ein"[[:space:]]*:[[:space:]]*1' "$PCONFIG/ankersolix.json" 2>/dev/null; then
+    if "$PY" "$SKRIPT" --freigeben >/dev/null 2>&1; then
+        echo "<OK> Die Anlage wurde auf Eigenverbrauch zurueckgestellt."
+    else
+        echo "<INFO> Die Rueckstellung auf Eigenverbrauch ist nicht gelungen."
+        echo "<INFO> Bitte die Betriebsart in der Anker-App selbst pruefen -"
+        echo "<INFO> ein gestellter Hauslast-Sollwert bleibt sonst stehen."
+    fi
+fi
+
+# ---------- 2. Dienst anhalten ----------
+if [ -x "$DIENST" ]; then
+    "$DIENST" stop >/dev/null 2>&1 || true
+fi
+PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
+if [ -f "$PID" ]; then
+    P=$(cat "$PID" 2>/dev/null)
+    # Nur hart beenden, wenn der Prozess noch lebt UND nachweislich unser
+    # Skript ist - Prozessnummern werden wiederverwendet.
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null \
+       && grep -qa "ankersolix.py" "/proc/$P/cmdline" 2>/dev/null; then
+        kill -9 "$P" 2>/dev/null || true
+    fi
+    rm -f "$PID"
+fi
+
+# ---------- 3. Sicherungen und Daten abraeumen ----------
+ANZAHL=0
+for f in ankersolix.json zugang.json; do
+    BK="$BASE/config/plugins/$PFOLDER.backup.$f"
+    if [ -f "$BK" ]; then
+        rm -f "$BK" && ANZAHL=$((ANZAHL + 1))
+    fi
+done
+rm -rf "$BASE/data/plugins/$PFOLDER"
+
+echo "<OK> Anker SOLIX entfernt, $ANZAHL Sicherungsdatei(en) geloescht."
+echo "<INFO> Das Anker-Konto selbst ist davon nicht beruehrt."
+exit 0
