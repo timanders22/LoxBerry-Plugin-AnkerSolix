@@ -1083,17 +1083,36 @@ if ($ak_rahmen) {
  * Typ, Name und Parameter stehen als Sprachschluessel drin, die Eingangsspalte
  * ist symbolisch und damit sprachfrei.
  */
+/**
+ * Die Parameterspalte einer Baustein-Zeile, die eine Befehlserkennung nennt.
+ *
+ * Das Muster kommt aus ak_check() - derselben Stelle, aus der die Feldtabelle
+ * und die Importdatei es holen. Bis 0.9.7 stand es als freier Text in der
+ * Sprachdatei (BAUSTEIN.P01…P08) und nannte es OHNE das fuehrende Semikolon,
+ * waehrend der Warnkasten daneben es fuer zwingend erklaerte. Ein Suchmuster
+ * in einer Sprachdatei kann dem Code nicht folgen; deshalb steht dort jetzt
+ * nur noch die Beschriftung mit einem %s.
+ *
+ * Rueckgabe als array('text' => …), damit die Ausgabe sie NICHT durch ak_t()
+ * schickt - der Wert ist bereits fertig.
+ */
+function ak_muster_zelle($feld)
+{
+    return array('text' => sprintf(ak_t('BAUSTEIN.P_BEFEHL'),
+        '<span class="sm-mono">' . ak_e(ak_check($feld)) . '</span>'));
+}
+
 function ak_bausteine()
 {
     return array(
-        array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', 'BAUSTEIN.P01', '&mdash;'),
-        array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', 'BAUSTEIN.P02', '&mdash;'),
-        array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', 'BAUSTEIN.P03', '&mdash;'),
-        array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', 'BAUSTEIN.P04', '&mdash;'),
-        array(5,  'BAUSTEIN.T_VE',      'BAUSTEIN.N05', 'BAUSTEIN.P05', '&mdash;'),
-        array(6,  'BAUSTEIN.T_VE',      'BAUSTEIN.N06', 'BAUSTEIN.P06', '&mdash;'),
-        array(7,  'BAUSTEIN.T_VE',      'BAUSTEIN.N07', 'BAUSTEIN.P07', '&mdash;'),
-        array(8,  'BAUSTEIN.T_VE',      'BAUSTEIN.N08', 'BAUSTEIN.P08', '&mdash;'),
+        array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', ak_muster_zelle('SOC'), '&mdash;'),
+        array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', ak_muster_zelle('PV'), '&mdash;'),
+        array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', ak_muster_zelle('BATP'), '&mdash;'),
+        array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', ak_muster_zelle('HAUS'), '&mdash;'),
+        array(5,  'BAUSTEIN.T_VE',      'BAUSTEIN.N05', ak_muster_zelle('NETZBEZUG'), '&mdash;'),
+        array(6,  'BAUSTEIN.T_VE',      'BAUSTEIN.N06', ak_muster_zelle('NETZEINSP'), '&mdash;'),
+        array(7,  'BAUSTEIN.T_VE',      'BAUSTEIN.N07', ak_muster_zelle('ALTER'), '&mdash;'),
+        array(8,  'BAUSTEIN.T_VE',      'BAUSTEIN.N08', ak_muster_zelle('OK'), '&mdash;'),
         array(9,  'BAUSTEIN.T_SWS',     'BAUSTEIN.N09', 'BAUSTEIN.P09', 'I &larr; #7'),
         array(10, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N10', '',             'I &larr; #8'),
         array(11, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N11', '',             'I1 &larr; #9, I2 &larr; #10'),
@@ -1112,7 +1131,7 @@ function ak_bausteine()
         array(24, 'BAUSTEIN.T_FORMEL',  'BAUSTEIN.N24', 'BAUSTEIN.P24', 'I1 &larr; #23, I2 &larr; #22'),
         array(25, 'BAUSTEIN.T_VA',      'BAUSTEIN.N25', 'BAUSTEIN.P25', 'I &larr; #24'),
         array(26, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N26', 'BAUSTEIN.P26', 'I1..I6 &larr; ' . ak_t('BAUSTEIN.ENERGIE_VE')),
-        array(27, 'BAUSTEIN.T_VE',      'BAUSTEIN.N27', 'BAUSTEIN.P27', '&mdash;'),
+        array(27, 'BAUSTEIN.T_VE',      'BAUSTEIN.N27', ak_muster_zelle('EINSPEISUNG'), '&mdash;'),
         array(28, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N28', 'BAUSTEIN.P28', 'I &larr; #27'),
         array(29, 'BAUSTEIN.T_VA',      'BAUSTEIN.N29', 'BAUSTEIN.P29', 'I &larr; #28'),
         array(30, 'BAUSTEIN.T_VEZ',     'BAUSTEIN.N30', 'BAUSTEIN.P30', '&mdash;'),
@@ -1128,7 +1147,8 @@ function ak_bausteine()
     <th><?= ak_e(ak_t('LOX.T_PARAMETER')) ?></th><th><?= ak_e(ak_t('LOX.T_EINGAENGE')) ?></th></tr>
 <?php foreach (ak_bausteine() as $ak_b) { ?>
 <tr><td><?= (int) $ak_b[0] ?></td><td><?= ak_t($ak_b[1]) ?></td><td><?= ak_t($ak_b[2]) ?></td>
-    <td><?= $ak_b[3] !== '' ? ak_t($ak_b[3]) : '&mdash;' ?></td><td><?= $ak_b[4] ?></td></tr>
+    <td><?= is_array($ak_b[3]) ? $ak_b[3]['text']
+             : ($ak_b[3] !== '' ? ak_t($ak_b[3]) : '&mdash;') ?></td><td><?= $ak_b[4] ?></td></tr>
 <?php } ?>
 </table>
 </div>

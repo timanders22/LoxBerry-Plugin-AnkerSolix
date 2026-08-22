@@ -122,6 +122,38 @@ function ak_vorlage_probe()
             count(ak_felder_zeile('status')), count(ak_felder_zeile('energie'))));
 }
 
+/**
+ * Traegt jedes Suchmuster, das die Oberflaeche zum Abschreiben anzeigt, das
+ * fuehrende Semikolon?
+ *
+ * Die Lehre aus 0.9.7: die Feldtabellen und die Importdatei kamen aus
+ * ak_check(), die Baustein-Liste aber aus der Sprachdatei - und nannte das
+ * Muster acht Mal ohne Semikolon. Ein Bestandslauf ueber alle Linien hat es
+ * gefunden, kein Werkzeug dieses Plugins. Diese Zeile schliesst die Luecke:
+ * sie sieht sich die FERTIG GERENDERTE Tabelle an, nicht den Quelltext.
+ */
+function ak_bausteinmuster_probe()
+{
+    $ohne = array();
+    $mit = 0;
+    foreach (ak_bausteine() as $b) {
+        $text = is_array($b[3]) ? $b[3]['text'] : ak_t($b[3]);
+        if (preg_match_all('/\\\\i(;?)([A-Z_]{2,})=/', $text, $t, PREG_SET_ORDER)) {
+            foreach ($t as $x) {
+                if ($x[1] === ';') {
+                    $mit++;
+                } else {
+                    $ohne[] = $x[2];
+                }
+            }
+        }
+    }
+    if ($ohne) {
+        return array(0, sprintf(ak_t('TEST.A_BAUSTEINMUSTER_FEHLT'), implode(', ', $ohne)));
+    }
+    return array(1, sprintf(ak_t('TEST.A_BAUSTEINMUSTER_OK'), $mit));
+}
+
 function ak_pruefungen()
 {
     $p = ak_paths();
@@ -261,6 +293,9 @@ function ak_pruefungen()
 
     list($stand, $text) = ak_vorlage_probe();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_VORLAGE'), $text);
+
+    list($stand, $text) = ak_bausteinmuster_probe();
+    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_BAUSTEINMUSTER'), $text);
 
     return $zeilen;
 }
