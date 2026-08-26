@@ -355,6 +355,54 @@ $ak_rahmen = class_exists('LBWeb', false);
 if ($ak_rahmen) {
     LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($ak_post && isset($_POST['ak_sichern'])) {
+    $ak_js = json_encode(ak_config(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($ak_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="ankersolix_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $ak_js;
+        exit;
+    }
+    $ak_fehler[] = ak_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($ak_post && isset($_POST['ak_zurueck'])) {
+    if (!isset($_FILES['ak_sicherung']) || !is_array($_FILES['ak_sicherung'])
+        || !isset($_FILES['ak_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['ak_sicherung']['tmp_name'])) {
+        $ak_fehler[] = ak_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['ak_sicherung']['size'] > 262144) {
+        $ak_fehler[] = ak_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($ak_neu, $ak_mangel, $ak_n) = ak_sicherung_lesen(
+            (string) @file_get_contents($_FILES['ak_sicherung']['tmp_name']));
+        if ($ak_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $ak_fehler[] = ak_t('EINST.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $ak_mangel);
+        } elseif (ak_config_speichern($ak_neu)) {
+            $ak_meldungen[] = sprintf(ak_t('EINST.SICH_UEBERNOMMEN'), $ak_n);
+        } else {
+            $ak_fehler[] = ak_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 /* Hausstandard, wortgetreu aus VORLAGE_hausstandard.css.html uebernommen.
@@ -784,6 +832,27 @@ if ($ak_rahmen) {
 </div>
 <p class="sm-hilfe"><?= ak_t('EINST.H_WEG') ?></p>
 <?php } ?>
+
+<h2><?= ak_e(ak_t('EINST.H_SICHERUNG')) ?></h2>
+<div class="sm-hinweis"><?= ak_t('EINST.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= ak_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="ak_sichern" value="1"><?= ak_e(ak_t('EINST.K_SICHERN')) ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
+    <input data-role="none" type="file" name="ak_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ak_zurueck" value="1"><?= ak_e(ak_t('EINST.K_ZURUECK')) ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ================= Reiter: MQTT ================= -->
@@ -838,7 +907,7 @@ if ($ak_rahmen) {
 </table>
 
 <h2><?= ak_e(ak_t('MQTT.H_ABO')) ?></h2>
-<div class="sm-warnung"><?= ak_t('MQTT.ABO_WARNUNG') ?></div>
+<div class="sm-warnung"><?= ak_abo_text() ?></div>
 <div class="sm-step">
 <?= ak_t('MQTT.ABO_SCHRITTE') ?>
 <p><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic']) ?>/#</span></p>
@@ -871,7 +940,7 @@ if ($ak_rahmen) {
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S2_TITEL')) ?></b><br>
 <?= ak_t('LOX.S2_TEXT') ?>
 <p><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic']) ?>/#</span></p>
-<div class="sm-warnung"><?= ak_t('LOX.S2_WARNUNG') ?></div>
+<div class="sm-warnung"><?= ak_abo_text() ?></div>
 </div>
 
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S3_TITEL')) ?></b><br>
