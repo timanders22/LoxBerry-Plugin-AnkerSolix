@@ -254,6 +254,22 @@ function ak_pruefungen()
     }
 
     /* --- 6. MQTT --- */
+    /* Veroeffentlicht DIESES Plugin ueberhaupt? (Regeln/04, B46 aus
+     * BatterieBMS 0.9.17, 06.09.2026)
+     *
+     * Die Zeile darunter liest den Autostart des GATEWAYS aus der
+     * general.json - das ist eine Aussage ueber LoxBerry, nicht ueber dieses
+     * Plugin. Steht der eigene Schalter auf aus, geht nichts an den Broker
+     * und damit nichts an Loxone; der Reiter zeigte dazu trotzdem einen
+     * gruenen Haken und konnte die beiden Faelle gar nicht unterscheiden.
+     * Am Geraet gemessen (BatterieBMS, 06.09.2026): Dienst lief, Gateway
+     * lief, 35 s Mithoeren am Broker bei 30 s Takt - keine einzige Nachricht.
+     *
+     * Grau statt rot: ausgeschaltet ist eine Entscheidung, kein Fehler. */
+    $mqttEin = !empty($cfg['mqtt_ein']);
+    $zeilen[] = ak_pruefzeile($mqttEin ? 1 : -1, ak_t('TEST.F_MQTT_EIN'),
+        ak_t($mqttEin ? 'TEST.A_MQTT_EIN_JA' : 'TEST.A_MQTT_EIN_NEIN'));
+
     $m = ak_mqtt_zustand();
     if (!$m['gefunden']) {
         $zeilen[] = ak_pruefzeile(0, ak_t('TEST.F_MQTT'), ak_t('TEST.A_MQTT_NICHT_GEFUNDEN'));

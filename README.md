@@ -16,6 +16,69 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.12 — die zehn Steuerbefehle tragen einen Namen
+
+- **Der Reiter Test sagt jetzt, ob die MQTT-Veröffentlichung dieses Plugins
+  eingeschaltet ist.** Bis 0.9.11 stand dort nur der Zustand des MQTT-Gateways
+  von LoxBerry — das ist eine Aussage über den LoxBerry, nicht über dieses
+  Plugin. Wer die Veröffentlichung ausgeschaltet hatte, sah trotzdem einen
+  grünen Haken und konnte am Reiter nicht erkennen, dass nichts an den Broker
+  geht. Die neue Zeile steht vor der Gateway-Zeile und ist **grau**, wenn
+  ausgeschaltet — das ist eine Entscheidung, kein Fehler. Anlass: derselbe
+  Befund an BatterieBMS 0.9.17, dort am Gerät gemessen (`Regeln/04`).
+
+Bis 0.9.11 lieferte die Vorlage der Steuerbefehle **zehn Ausgänge ohne
+Beschriftung**.
+
+Loxone Config nimmt den `Comment` einer Vorlage als **Anzeigenamen**. Stand
+dort nichts, zeigte Config den Titel. Jetzt steht dort ein Name mit
+Gerätevorsatz — die Bausteinsuche des Miniservers kennt den Geräteknoten
+nicht, und „Automatik" gibt es auch im Batterie-Plugin.
+
+**Die Titel sind unverändert geblieben** — ein geänderter Titel legt beim
+erneuten Import neue Ausgänge **neben** die alten. Wer die Vorlage neu
+einliest, bekommt dieselben Ausgänge, nur mit Namen.
+
+Der Vorsatz nennt die **Anlagennummer**, weil bei zwei Speichern sonst
+zweimal dieselben zehn Namen in der Bausteinsuche stünden:
+`Hauslast setzen (W)` → **SOLIX 1: Hauslast setzen (W)**.
+
+Gemessen: 10 von 10 Titeln und Befehlen byteweise wie in 0.9.11, 0 Ausgänge
+ohne Beschriftung (vorher 10), längster Anzeigename 35 Zeichen. Übersetzt
+wird nichts Neues — die Beschriftung ist derselbe Text wie im Titel. Im Kopf
+der Vorlage steht jetzt außerdem, dass Loxone Config beim Import neu anlegt
+und nichts überschreibt.
+
+### Der Dienst konnte sein Protokoll verlieren, ohne dass es auffiel
+
+`log/plugins` liegt auf einer Ramdisk (`/dev/zram0`). Wird sie geleert — beim
+Neustart, durch LoxBerrys `log_maint`, oder von Hand —, ist die Datei fort. Ein
+`RotatingFileHandler`, der sie beim Start **einmal** geöffnet hat, schreibt
+danach bis zum nächsten Neustart in einen gelöschten Inode: keine
+Fehlermeldung, keine Datei, kein Hinweis. Auch die Rotation greift dann nicht
+mehr.
+
+Diese Fassung benutzt deshalb `WachsameRotation` in `bin/ankersolix.py` — einen
+umlaufenden Handler, der vor jeder Zeile Gerätenummer und Inode vergleicht und
+nötigenfalls neu öffnet. Die Standardbibliothek hat für den einen Fall den
+`WatchedFileHandler` und für den anderen den `RotatingFileHandler`, aber
+nichts, was beides kann; deshalb die eigene Klasse.
+
+Auf dem LoxBerry geeicht, vier Prüfungen und in beide Richtungen: schreiben,
+nach dem Löschen weiterschreiben, Umlauf bei Überlänge, nach dem Umlauf erneut
+löschen. Mit dem alten Handler ist die Zeile nach dem Löschen verloren und
+bleibt es, mit dem neuen steht sie in der wieder angelegten Datei. Auf einem
+Windows-Arbeitsplatz lässt sich das nicht messen — dort kann eine offene Datei
+gar nicht gelöscht werden.
+
+Aufgefallen ist die Bauart am Heimkino-Plugin, dessen Dienst sieben Stunden
+ohne Protokolldatei lief, und am laufenden Gerät belegt: der
+Midea2Lox-Dienst hielt `midea2lox.log (deleted)` offen, während unter
+demselben Namen längst eine neue Datei fortgeschrieben wurde — von außen sah
+das Plugin gesund aus. Elf Linien tragen dieselbe Bauart; alle elf sind am
+06.09.2026 nachgezogen worden.
+
+
 ## Was sich gegenüber 0.9.6 geändert hat
 
 Reparaturen zuerst — sie betreffen Zusagen, die 0.9.6 gemacht und nicht

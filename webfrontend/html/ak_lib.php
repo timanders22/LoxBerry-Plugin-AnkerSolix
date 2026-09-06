@@ -1462,8 +1462,9 @@ function ak_vo_vorlage($nummer = 1)
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
     $o .= '<VirtualOut HintText="" Title="Anker SOLIX ' . $nummer . ' steuern (LoxBerry-Plugin)" '
-        . 'Comment="Steuerbefehle ueber das Plugin ' . ak_x($p['plugin'])
-        . ' - ENTHAELT DAS AKTIONSTOKEN, nicht weitergeben." '
+        . 'Comment="Steuerbefehle über das Plugin ' . ak_x($p['plugin'])
+        . ' - ENTHÄLT DAS AKTIONSTOKEN, nicht weitergeben. Loxone Config legt beim '
+        . 'Import neu an und überschreibt nichts." '
         . 'Address="http://' . ak_x(ak_host()) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
     $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
     $befehle = array(
@@ -1478,11 +1479,18 @@ function ak_vo_vorlage($nummer = 1)
         array(ak_t('VO.NOTSTROM'),  array('aktion' => 'notstromreserve', 'anlage' => $nummer), 'prozent=<v>', true),
         array(ak_t('VO.ABRUF'),     array('aktion' => 'abruf', 'anlage' => $nummer), '', false),
     );
+    /* Der Comment ist der ANZEIGENAME in Loxone Config (Regeln/07); bis
+     * 0.9.11 stand dort "", und Config zeigte den Titel. Der Vorsatz nennt
+     * die Anlage - bei zwei Speichern stehen sonst zweimal dieselben zehn
+     * Namen in der Bausteinsuche. Uebersetzt wird nichts Neues: die
+     * Beschriftung ist derselbe Text wie im Titel. */
+    $vorsatz = 'SOLIX ' . $nummer . ': ';
     foreach ($befehle as $c) {
         // Der Platzhalter <v> darf NICHT durch rawurlencode laufen - Loxone
         // ersetzt ihn woertlich. Deshalb wird er hinter der Adresse angehaengt.
         $adr = ak_adresse($c[1], false) . ($c[2] !== '' ? '&' . $c[2] : '');
-        $o .= "\t" . '<VirtualOutCmd Title="' . ak_x($c[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= "\t" . '<VirtualOutCmd Title="' . ak_x($c[0]) . '" Comment="'
+            . ak_x($vorsatz . $c[0]) . '" CmdOnMethod="GET" CmdOffMethod="GET" ';
         $o .= 'CmdOn="' . ak_x($adr) . '" ';
         $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
         $o .= 'Analog="' . (!empty($c[3]) ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
