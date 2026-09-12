@@ -140,6 +140,35 @@ if ! command -v git >/dev/null 2>&1; then
     echo "<INFO> eingespielt, war die Paketquelle nicht erreichbar."
 fi
 
+# ---------- Abhaengigkeiten der Bibliothek ----------
+# anker-solix-api bringt seine Abhaengigkeiten NICHT im Paket mit. Die
+# pyproject.toml setzt dynamic = ["dependencies"] und fuehrt die Liste unter
+# [tool.poetry.dependencies] mit package-mode = false. Gebaut wird das Paket
+# aber von setuptools, und das kennt den Poetry-Abschnitt nicht: das fertige
+# Wheel traegt KEINE einzige Requires-Dist-Zeile. Nachgemessen am 12.09.2026
+# in der dist-info des Geraets - dort steht nur Name, Version und
+# Requires-Python.
+#
+# Folge: "pip install git+..." meldet Erfolg und installiert nur den nackten
+# Paketordner. Beim ersten Laden bricht es mit "No module named 'aiohttp'" ab.
+# Genau das ist bei der Installation vom 11.09.2026 16:40 geschehen.
+#
+# Die fuenf Namen und ihre Untergrenzen sind aus der pyproject.toml des Tags
+# $LIBTAG abgeschrieben, nicht geraten. python-dotenv wird vom Paket heute
+# nicht eingelesen (nur von den Beispielskripten des Projekts) - es steht
+# trotzdem hier, weil es zur erklaerten Liste der Bibliothek gehoert.
+LIBDEPS="aiohttp>=3.10.11 aiofiles>=25.1.0 cryptography>=3.4.8 paho-mqtt>=2.1.0 python-dotenv>=1.2.1"
+echo "<INFO> Installiere die Abhaengigkeiten der Bibliothek ..."
+if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary $LIBDEPS; then
+    echo "<FAIL> Die Abhaengigkeiten der Bibliothek liessen sich nicht installieren."
+    echo "<FAIL> Betroffen: $LIBDEPS"
+    echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, oder fuer diese"
+    echo "<FAIL> Architektur gibt es kein fertiges Wheel und es fehlt der"
+    echo "<FAIL> Uebersetzer. Abhilfe von Hand:"
+    echo "<FAIL>     sudo apt install build-essential python3-dev"
+    exit 1
+fi
+
 echo "<INFO> Installiere anker-solix-api $LIBTAG (benoetigt eine Internetverbindung) ..."
 # --prefer-binary: lieber ein fertiges Wheel als selbst uebersetzen. Auf
 # 32-Bit-ARM (aeltere Raspberry Pi) fehlen fuer manche Abhaengigkeiten die
@@ -162,12 +191,32 @@ fi
 
 # Rueckgabewert allein genuegt nicht - es wird nachgesehen, ob sich die
 # Bibliothek auch laden laesst.
-if ! "$VENV/bin/python3" -c 'from anker_solix_api.api import AnkerSolixApi' 2>/dev/null; then
+#
+# ACHTUNG beim Namen: die Verteilung heisst "anker-solix-api", der Paketordner
+# darin heisst schlicht "api" (top_level.txt der dist-info, nachgemessen am
+# 12.09.2026). Bis 0.9.14 stand hier "from anker_solix_api.api import ..." -
+# ein Name, den es nie gab. Die Pruefung schlug damit bei JEDER Installation
+# fehl, auch bei einer vollstaendig geglueckten.
+#
+# Die Fehlermeldung wird angezeigt statt verworfen: "laesst sich nicht laden"
+# ohne Grund war 0.9.14s zweiter Fehler - die eigentliche Ursache
+# (ModuleNotFoundError: aiohttp) stand hinter 2>/dev/null.
+if ! LADEFEHLER=$("$VENV/bin/python3" -c 'import aiohttp
+from api.api import AnkerSolixApi' 2>&1); then
     echo "<FAIL> anker-solix-api ist installiert, laesst sich aber nicht laden."
+    echo "<FAIL> Meldung von Python:"
+    echo "$LADEFEHLER" | sed 's/^/<FAIL>     /'
     exit 1
 fi
 LIBVER=$("$VENV/bin/python3" -c 'import importlib.metadata as m; print(m.version("anker-solix-api"))' 2>/dev/null || echo "unbekannt")
 echo "<OK> anker-solix-api geladen, Fassung $LIBVER"
+# Die Fassungen der Abhaengigkeiten werden nicht festgenagelt, sondern nur
+# nach unten begrenzt - sonst gibt es auf einer Architektur ohne fertiges
+# Wheel keinen Weg mehr. Damit eine Installation trotzdem nachvollziehbar
+# bleibt, steht hier im Protokoll, was tatsaechlich eingespielt wurde.
+echo "<INFO> Eingespielte Abhaengigkeiten:"
+"$VENV/bin/python3" -m pip list --format=freeze 2>/dev/null     | grep -iE '^(aiohttp|aiofiles|cryptography|paho-mqtt|python-dotenv)=='     | sed 's/^/<INFO>     /'
+
 
 # ---------- Rechte ----------
 chmod 755 "$PBIN/ankersolix.py" 2>/dev/null
@@ -181,6 +230,23 @@ chmod 644 "$PBIN/ak_notify.php" 2>/dev/null
 chmod 755 "$SELFDIR/uninstall/uninstall" 2>/dev/null
 chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
 chmod 600 "$PCONFIG/zugang.json"
+
+# ---------- Dienst wieder anwerfen ----------
+# Der Merker stammt aus preupgrade.sh und sagt, dass der Dienst vor dem
+# Upgrade laufen sollte. Bis 0.9.13 gab es ihn nicht: nach jedem Update lag
+# das Plugin still, bis jemand von Hand auf "Dienst starten" drueckte - und
+# weil `soll_laufen` im abgeraeumten Datenordner lag, griff auch der
+# minuetliche Waechter nicht. Uebernommen von Weissware 0.9.18.
+LIEF="$BASE/config/plugins/$PFOLDER.backup.lief"
+if [ -f "$LIEF" ]; then
+    if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" start >/dev/null 2>&1; then
+        echo "<OK> Der Dienst wurde wieder gestartet."
+    else
+        echo "<INFO> Der Dienst lief vor dem Upgrade, liess sich aber nicht"
+        echo "<INFO> starten. Bitte im Reiter Einstellungen nachsehen."
+    fi
+    rm -f "$LIEF"
+fi
 
 echo "<OK> Installation abgeschlossen."
 echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, Anker-Zugangsdaten eintragen"

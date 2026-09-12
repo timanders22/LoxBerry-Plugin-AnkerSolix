@@ -1470,7 +1470,11 @@ def drosselung_setzen(api, cfg: dict) -> None:
 
 async def dienst(einmal: bool = False, freigeben: bool = False) -> int:
     from aiohttp import ClientSession, ClientTimeout
-    from anker_solix_api.api import AnkerSolixApi
+    # Der Paketordner der Verteilung "anker-solix-api" heisst schlicht "api"
+    # (top_level.txt der dist-info). Bis 0.9.14 stand hier
+    # "anker_solix_api.api" - ein Name, den es in keiner Fassung der
+    # Bibliothek gab. Naeheres in postinstall.sh.
+    from api.api import AnkerSolixApi
 
     cfg = config()
     z = zugang()
@@ -1661,16 +1665,40 @@ def selbsttest() -> int:
 
     try:
         import importlib.metadata as md
-        from anker_solix_api.api import AnkerSolixApi
+        # aiohttp zuerst: die Bibliothek zieht es in ihrer ersten Zeile und
+        # bringt es NICHT selbst mit (ihr Wheel traegt keine Requires-Dist).
+        # Fehlt es, soll hier "aiohttp" stehen und nicht eine Meldung ueber
+        # anker-solix-api, die in die Irre fuehrt.
+        import aiohttp
+        from api.api import AnkerSolixApi
         try:
             fassung = md.version("anker-solix-api")
         except Exception:  # noqa: BLE001
             fassung = "unbekannt"
         zeilen.append(f"[OK]   Bibliothek anker-solix-api geladen, Fassung {fassung}")
+        # "api" ist ein sehr gewoehnlicher Paketname, und der Ordner dieses
+        # Skripts steht als erster im Suchweg. Legt jemand eine api.py daneben,
+        # verdeckt sie die Bibliothek lautlos. Deshalb wird nicht nur gemeldet,
+        # DASS geladen wurde, sondern WOHER.
+        herkunft = getattr(sys.modules.get("api.api"), "__file__", "unbekannt")
+        zeilen.append(f"[OK]   geladen aus {herkunft}")
+        zeilen.append(f"[OK]   aiohttp {getattr(aiohttp, '__version__', 'unbekannt')}")
 
         # Die Wege, ueber die das Plugin die Drosselung setzt und schreibt -
         # nachgesehen, nicht angenommen. Genau hier lag der Fehler bis 0.9.6:
         # das Plugin setzte ein Attribut, das es nie gab, und schwieg dazu.
+        #
+        # Die Sitzungsklasse wird MITGEPRUEFT, und zwar als Klasse. Bis 0.9.14
+        # stand hier getattr(AnkerSolixApi, "apisession", object): ein Zugriff
+        # auf die KLASSE, die "apisession" gar nicht kennt - der Name entsteht
+        # erst am fertigen Objekt. Der Ausdruck fiel deshalb immer auf object
+        # zurueck, und der Selbsttest meldete "Pause zwischen Anfragen" und
+        # "Zeitschranke" als wirkungslos. Beide werden zur Laufzeit sehr wohl
+        # gesetzt: drosselung_setzen() fragt das Objekt. requestDelay und
+        # requestTimeout wohnen an AnkerSolixClientSession, endpointLimit an
+        # beiden - gemessen am 12.09.2026 gegen v3.6.3. Aufgefallen ist es
+        # erst, als die Bibliothek zum ersten Mal ueberhaupt lud.
+        from api.session import AnkerSolixClientSession as SITZUNGSKLASSE
         for name, kandidaten in (
             ("Anfragedrosselung", ("endpointLimit",)),
             ("Pause zwischen Anfragen", ("requestDelay",)),
@@ -1682,7 +1710,7 @@ def selbsttest() -> int:
         ):
             gefunden = [k for k in kandidaten
                         if hasattr(AnkerSolixApi, k)
-                        or hasattr(getattr(AnkerSolixApi, "apisession", object), k)]
+                        or hasattr(SITZUNGSKLASSE, k)]
             if gefunden:
                 zeilen.append(f"[OK]   {name}: {', '.join(gefunden)}")
             else:

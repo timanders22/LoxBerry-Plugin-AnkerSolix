@@ -5,16 +5,93 @@ Bindet **Anker SOLIX** an Loxone an: Solarbank E1600 (Gen 1), Solarbank 2
 Smart Plugs, Powerstations (C300 bis F3800), Power Panel und Home Energy
 System X1.
 
-> **Fassung 0.9.7 — ungeprüft.** Das Plugin wurde ohne Anker-Konto und ohne
+> **Fassung 0.9.x — ungeprüft.** Das Plugin wurde ohne Anker-Konto und ohne
 > Gerät gebaut. Aufbau, Sprachdateien, Endpunkt und Oberfläche sind geprüft;
 > ob die Feldnamen der Cloud-Antwort passen und ob die schreibenden Befehle am
-> Gerät die erwartete Wirkung haben, ist es **nicht**. Deshalb 0.9.7 und nicht
+> Gerät die erwartete Wirkung haben, ist es **nicht**. Deshalb 0.9.x und nicht
 > 1.0.0. Wer es erprobt, findet im Reiter *Test* den Knopf *Rohdaten der Cloud
 > ansehen* — dort stehen die tatsächlichen Feldnamen der eigenen Anlage.
 >
 > **Neu in 0.9.7 und damit besonders unerprobt:** Netzeinspeisung sperren,
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
+
+## Version 0.9.15 — die Bibliothek war nie ladbar
+
+**Das Plugin konnte in keiner Fassung vor dieser einen einzigen Wert holen.**
+Die Installation vom 11.09.2026 hat es gezeigt: `<FAIL> anker-solix-api ist
+installiert, laesst sich aber nicht laden.` Zwei Fehler stecken darin, und
+jeder allein hätte genügt.
+
+**Erstens der Name.** Die Verteilung heißt `anker-solix-api`, der Paketordner
+darin heißt schlicht `api`. Das Plugin schrieb an drei Stellen
+`from anker_solix_api.api import AnkerSolixApi` — ein Name, den es in keiner
+Fassung der Bibliothek gab. Nachgemessen in der `top_level.txt` der
+`dist-info` am Gerät.
+
+**Zweitens die Abhängigkeiten.** `anker-solix-api` bringt sie nicht mit. Die
+`pyproject.toml` führt sie unter `[tool.poetry.dependencies]` mit
+`package-mode = false` und setzt `dynamic = ["dependencies"]`; gebaut wird das
+Paket aber von setuptools, das den Poetry-Abschnitt nicht kennt. Das fertige
+Wheel trägt **keine einzige** `Requires-Dist`-Zeile. `pip install git+…` meldet
+darum Erfolg und spielt nur den nackten Paketordner ein. Die erste Zeile von
+`api/api.py` lautet `from aiohttp import ClientSession` — und aiohttp war nie
+da. `postinstall.sh` installiert jetzt die fünf von der Bibliothek erklärten
+Pakete (aiohttp, aiofiles, cryptography, paho-mqtt, python-dotenv) mit den
+Untergrenzen aus ihrer eigenen `pyproject.toml`.
+
+**Die Ursache stand hinter `2>/dev/null`.** Die Ladeprüfung verwarf die
+Meldung von Python und sagte nur, es gehe nicht. Der eigentliche Satz —
+`ModuleNotFoundError: No module named 'aiohttp'` — hätte den Fehler sofort
+benannt. Er steht jetzt im Installationsprotokoll, eingerückt unter `<FAIL>`.
+Ebenso steht dort, welche Fassungen der Abhängigkeiten tatsächlich eingespielt
+wurden: festgenagelt sind sie nicht, sonst gäbe es auf einer Architektur ohne
+fertiges Wheel keinen Weg mehr.
+
+`api` ist ein sehr gewöhnlicher Paketname, und der Ordner des Dienstskripts
+steht als erster im Suchweg. Legt jemand eine `api.py` daneben, verdeckt sie
+die Bibliothek lautlos. Der Selbsttest meldet deshalb nicht mehr nur, **dass**
+geladen wurde, sondern **woher** — und nennt aiohttp mit seiner Fassung.
+
+**Und dahinter lag noch ein Fehlalarm.** Kaum lud die Bibliothek zum ersten
+Mal, meldete der Selbsttest zwei Einstellungen als wirkungslos: *Pause
+zwischen Anfragen* und *Zeitschranke*. Beide werden zur Laufzeit sehr wohl
+gesetzt — `drosselung_setzen()` fragt das fertige Objekt, und dort gibt es
+`apisession`. Der Selbsttest fragte die **Klasse**, die den Namen nicht kennt,
+fiel deshalb immer auf `object` zurück und fand nichts. Er sieht jetzt dort
+nach, wo die beiden Wege wohnen: an `AnkerSolixClientSession`. Zwölf von zwölf
+Wegen grün, am Gerät gemessen.
+
+Gegengeprüft in einer eigenen venv am Gerät: mit den fünf Paketen und dem
+richtigen Namen lädt `AnkerSolixApi`, alle zwölf geprüften Wege sind
+vorhanden. Ohne sie nicht. **Am Verhalten gegenüber einer echten Anlage ändert das nichts — hier
+steht weiterhin kein Anker-Gerät zum Messen.**
+
+## Version 0.9.14 — der Dienst kommt nach dem Update von selbst zurück
+
+**Das Plugin stand nach jedem Update still.** `dienst.sh stop` entfernt den
+Sollmerker `soll_laufen`, der Installer räumt gleich darauf den ganzen
+Datenordner ab, und `postinstall.sh` rief an keiner Stelle `start`. Der
+minütliche Wächter findet ohne Sollmerker nichts zu tun; die Installation
+meldete Erfolg, und die Oberfläche zeigte „gestoppt", als hätte der Betreiber
+selbst angehalten. Wer das Plugin nach einem Auto-Update für tot hielt, lag
+nicht falsch — es war still abgeschaltet.
+
+`preupgrade.sh` merkt sich jetzt **vor** dem Anhalten, ob der Dienst laufen
+sollte, und legt den Merker **neben** den Konfigurationsordner (alles darin und
+im Datenordner ist nach `purge_installation` weg). `postinstall.sh` startet ihn
+danach wieder und sagt es. Denselben Weg gehen Bewässerung seit 0.9.19 und
+Weißware seit 0.9.18.
+
+**Und das Protokoll behauptete etwas, das nicht stimmte.** „Laufender Dienst
+angehalten." stand bedingungslos da — auch wenn gar keiner lief. `anhalten()`
+gibt in diesem Fall „laeuft nicht" und 0 zurück, und die Antwort ging nach
+`/dev/null`. Dasselbe im Rückfallweg, wo eine liegengebliebene PID-Datei
+genügte. Beides hängt jetzt an der Tatsache statt am Aufruf.
+
+Geprüft mit `Werkzeuge/preupgrade_meldung_pruefen.py`, das `preupgrade.sh` mit
+einer Dienst-Attrappe wirklich ausführt: gegen 0.9.14 grün, gegen 0.9.13 rot.
+**Am Verhalten des Dienstes selbst ändert sich nichts.**
 
 ## Version 0.9.12 — die zehn Steuerbefehle tragen einen Namen
 

@@ -24,9 +24,38 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # warten, dabei jede Sekunde nachsehen, und nur wenn der Prozess dann noch
 # lebt UND nachweislich unser Skript ist, hart beenden.
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
+
+# ---------- Lief der Dienst? ZUERST merken ----------
+# Das ist die Berichtigung eines Fehlers, der bis 0.9.13 in jedem Update
+# steckte: `dienst.sh stop` entfernt den Sollmerker `soll_laufen`, der
+# Installer raeumt gleich darauf data/plugins/<ordner>/ vollstaendig ab,
+# und postinstall.sh rief an keiner Stelle `start`. Nach JEDEM Update
+# stand das Plugin still - der minuetliche Waechter findet ohne
+# Sollmerker nichts zu tun, die Installation meldet Erfolg, und die
+# Oberflaeche zeigt "gestoppt", als haette der Betreiber es selbst
+# angehalten. Dieselbe Stelle haben Bewaesserung und Weissware bereits
+# berichtigt; postinstall.sh holt den Dienst jetzt zurueck.
+#
+# Der Merker liegt NEBEN dem Konfigordner: alles darin und im Datenordner
+# ist nach purge_installation weg.
+LIEF="$BASE/config/plugins/$PFOLDER.backup.lief"
+rm -f "$LIEF"
+if [ -f "$BASE/data/plugins/$PFOLDER/soll_laufen" ]; then
+    : > "$LIEF" || true
+    echo "<INFO> Der Dienst lief - er wird nach dem Upgrade wieder gestartet."
+fi
+
+# Die Meldung haengt am Merker, nicht am blossen Aufruf: `anhalten()` gibt
+# auch ohne laufenden Dienst 0 zurueck („laeuft nicht"), und mit `|| true`
+# stand die Zeile ohnehin unbedingt da. Gemessen 11.09.2026 ueber den
+# Bestand; derselbe Fehler steckte in vier Linien.
 if [ -x "$DIENST" ]; then
     "$DIENST" stop >/dev/null 2>&1 || true
-    echo "<INFO> Laufender Dienst angehalten."
+    if [ -f "$LIEF" ]; then
+        echo "<INFO> Laufender Dienst angehalten."
+    else
+        echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
+    fi
 else
     # Rueckfall, falls das Dienstskript fehlt: dieselbe Sorgfalt von Hand.
     PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
@@ -43,9 +72,11 @@ else
             if kill -0 "$P" 2>/dev/null && grep -qa "ankersolix.py" "/proc/$P/cmdline" 2>/dev/null; then
                 kill -9 "$P" 2>/dev/null || true
             fi
+            # Nur HIER gemeldet: eine liegengebliebene PID-Datei allein
+            # ist kein laufender Dienst.
+            echo "<INFO> Laufender Dienst angehalten (Rueckfallweg)."
         fi
         rm -f "$PID"
-        echo "<INFO> Laufender Dienst angehalten (Rueckfallweg)."
     fi
 fi
 

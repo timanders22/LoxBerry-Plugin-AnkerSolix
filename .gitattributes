@@ -1,0 +1,16 @@
+# Was eingecheckt ist, wird auch ausgeliefert. Keine Umschreibung.
+#
+# "-text" heisst: git rechnet an keiner Datei herum - weder beim Einchecken
+# noch beim Auschecken noch beim Erzeugen des Tag-Archivs. Ohne diese Zeile
+# entscheidet der jeweilige Rechner (core.autocrlf), und ein Ordner mit
+# CRLF-Dateien ist dann nie byteweise gleich mit seinem Tag-Archiv.
+#
+# Fuenf Textdateien dieser Linie fuehren CRLF und sollen es behalten
+# (gemessen 12.09.2026): plugin.cfg, release.cfg, prerelease.cfg,
+# templates/lang/language_de.ini, templates/lang/language_en.ini. Der Rest
+# fuehrt LF. Die vier PNG sind Binaerdateien; die dort gezaehlten CR LF sind
+# Zufall im Bildstrom und genau der Grund, warum git an ihnen nichts
+# umrechnen darf.
+#
+# Bis 0.9.14 fehlte diese Datei. packen.py hat es bei jedem Lauf angemahnt.
+*	-text
