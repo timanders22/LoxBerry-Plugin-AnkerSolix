@@ -16,6 +16,28 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.16 — die Deinstallation stellte die Anlage nicht zurück
+
+Der LoxBerry-Installer legt das Deinstallationsskript unter
+`data/system/uninstall/ankersolix` ab und übergibt ihm Ordnernamen und
+LoxBerry-Wurzel als Argumente. Das Skript leitete den Ordnernamen aber aus
+seinem eigenen Ablageort ab und kam dort auf `system` statt `ankersolix`.
+Damit lief bei einer Deinstallation **nichts** von dem, wofür es da ist:
+
+- die Rückstellung der Solarbank auf Eigenverbrauch entfiel still, weil die
+  Konfiguration nicht gefunden wurde — ein gesetzter Hauslast-Sollwert wäre
+  stehen geblieben;
+- der Dienst wurde nicht angehalten;
+- die Sicherungen neben dem Konfigurationsordner blieben liegen, darunter
+  `ankersolix.backup.zugang.json` mit dem Kontopasswort im Klartext.
+
+Ordnername und Wurzel kommen jetzt aus den Argumenten des Installers. Gefunden
+am Govee-Plugin, dort am Gerät nachgerechnet; hier im Prüfstand so aufgerufen
+wie vom Installer nachgemessen.
+
+Die fünf Symbole tragen wieder die Fassung aus 0.9.15: in 0.9.16 war ein
+Herkunftsvermerk (C2PA) eingebettet, die Bildpunkte waren unverändert.
+
 ## Version 0.9.15 — die Bibliothek war nie ladbar
 
 **Das Plugin konnte in keiner Fassung vor dieser einen einzigen Wert holen.**

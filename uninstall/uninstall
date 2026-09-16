@@ -21,9 +21,20 @@
 #         altem Aktionstoken vor und stellte sie stillschweigend wieder her
 #         (ak_lib.php, ak_config). Eine "saubere" Neuinstallation war das
 #         nicht.
+#
+# Aufruf durch den Installer: data/system/uninstall/<name>
+#   <TEMPFILE> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <TEMPFOLDER>
+# Ordner und Wurzel kommen deshalb aus $3 und $5. Bis hierher wurde der Ordner
+# aus dem eigenen Ablageort abgeleitet - installiert ist das data/system, der
+# Ordnername wurde "system" (am Geraet so errechnet, 17.09.2026; Regeln/06).
 SELF=$(cd "$(dirname "$0")" && pwd)
-PFOLDER=$(basename "$(cd "$SELF/.." && pwd)")
-BASE=${LBHOMEDIR:-$(cd "$SELF/../../.." 2>/dev/null && pwd)}
+ARGV3=$3
+ARGV5=$5
+PFOLDER="${ARGV3:-ankersolix}"
+BASE="${ARGV5:-$LBHOMEDIR}"
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    BASE=$(cd "$SELF/../../.." 2>/dev/null && pwd)
+fi
 
 PBIN="$BASE/bin/plugins/$PFOLDER"
 PCONFIG="$BASE/config/plugins/$PFOLDER"
