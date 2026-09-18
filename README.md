@@ -16,6 +16,40 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.17 — „angehalten" traf den Falschen und ließ den Richtigen stehen
+
+Das Plugin erkannte seinen eigenen Dienst an einer **Teilzeichenkette** der
+Befehlszeile (`grep -qa "ankersolix.py" /proc/<nummer>/cmdline`). Das trifft
+jeden Prozess, in dem der Name irgendwo vorkommt — einen Editor mit der Datei
+offen, ein Sicherungsskript, das den Ordner durchsucht, den Einmallauf der
+eigenen Oberfläche. Und es sah immer nur **eine** Nummer an, nämlich die aus
+`data/plugins/ankersolix/dienst.pid`.
+
+Beides ist am 18.09.2026 in einem Wegwerfbaum unter Linux gemessen worden:
+
+- Stand die Nummer eines **fremden** Prozesses in der PID-Datei, meldete
+  `dienst.sh status` „laeuft", und `dienst.sh stop` beendete ihn. Dieselbe
+  Stelle steckte im Rückfallweg von `preupgrade.sh`, in `uninstall/uninstall`
+  und in der Kachel „Dienst läuft" der Oberfläche.
+- Liefen **zwei** eigene Dienste — einer ohne PID-Datei, wie ihn der
+  Minutenwächter starten kann, während der Installer den Datenordner gerade
+  abgeräumt hat —, dann meldete `stop` „angehalten", und einer lief weiter.
+
+Ein Prozess gilt jetzt nur dann als eigener Dienst, wenn seine Befehlszeile aus
+**genau zwei** Argumenten besteht: einem Python-Interpreter und dem vollen Pfad
+der eigenen `ankersolix.py`. Die Einmalläufe (`--einmal`, `--selbsttest`,
+`--vorgaben`, `--freigeben`) haben ein drittes Argument und werden dadurch nicht
+mehr getroffen. Gesucht wird zusätzlich über `/proc`, begrenzt auf den Benutzer
+des Dienstes, damit auch ein Dienst ohne PID-Datei mitgeht; vor **jedem** Signal
+— auch vor dem harten — wird neu nachgesehen, weil Prozessnummern
+wiederverwendet werden. `stop` sagt am Ende nicht mehr „angehalten", weil es
+etwas geschickt hat, sondern weil danach keiner mehr läuft; sonst nennt es die
+Nummern, die stehen geblieben sind.
+
+Geändert: `bin/dienst.sh`, `preupgrade.sh`, `uninstall/uninstall` und
+`webfrontend/html/ak_lib.php`. Die Rückstellung der Anlage auf Eigenverbrauch
+beim Deinstallieren (0.9.16) ist unverändert.
+
 ## Version 0.9.16 — die Deinstallation stellte die Anlage nicht zurück
 
 Der LoxBerry-Installer legt das Deinstallationsskript unter

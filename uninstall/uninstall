@@ -42,6 +42,64 @@ DIENST="$PBIN/dienst.sh"
 PY="$PBIN/venv/bin/python3"
 SKRIPT="$PBIN/ankersolix.py"
 
+# ---------- Die eigenen Prozesse erkennen ----------
+#
+# Argumentweise (Regeln/03, "Prozesse argumentweise erkennen"): argv[0] ist ein
+# Python, argv[1] ist genau der eigene Dienstpfad, ein drittes Argument gibt es
+# nicht. Bis 0.9.17 stand hier eine Teilzeichenkettensuche
+# (grep -qa "ankersolix.py"), und sie traf jede Befehlszeile, in der der Name
+# irgendwo vorkommt. In WSL gemessen (Pruefung-AnkerSolix-0.9.17, Fall 7): ein
+# fremder Prozess "python3 -c … <dienstpfad>", dessen Nummer in der PID-Datei
+# stand, war nach der Deinstallation tot.
+#
+# Das dritte Argument schliesst den Einmallauf --freigeben aus Abschnitt 1 aus:
+# er laeuft mit demselben Interpreter und demselben Skript, ist aber nicht der
+# Dauerlaeufer.
+AK_SKRIPT="$SKRIPT"
+AK_SKRIPT_R=$(readlink -f "$AK_SKRIPT" 2>/dev/null)
+[ -n "$AK_SKRIPT_R" ] || AK_SKRIPT_R="$AK_SKRIPT"
+AK_UID=$(id -u loxberry 2>/dev/null || id -u)
+
+ak_ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    {
+        IFS= read -r -d '' ak_a0 || return 1
+        IFS= read -r -d '' ak_a1 || return 1
+        case "${ak_a0##*/}" in python|python3|python3.*) ;; *) return 1 ;; esac
+        if [ "$ak_a1" != "$AK_SKRIPT" ]; then
+            [ "$(readlink -f "$ak_a1" 2>/dev/null)" = "$AK_SKRIPT_R" ] || return 1
+        fi
+        IFS= read -r -d '' ak_a2 && return 1
+        return 0
+    } < "/proc/$1/cmdline"
+}
+
+# Alle eigenen Dienste des eigenen Benutzers - auch die ohne PID-Datei.
+ak_dienste() {
+    for ak_d in /proc/[0-9]*; do
+        ak_ist_dienst "${ak_d#/proc/}" || continue
+        [ "$(stat -c %u "$ak_d" 2>/dev/null)" = "$AK_UID" ] || continue
+        echo "${ak_d#/proc/}"
+    done
+    return 0
+}
+
+# Beendet sie: freundlich, bis zu zehn Sekunden Zeit, dann hart - und vor JEDEM
+# Signal wird neu gesucht, auch vor dem kill -9.
+ak_dienste_beenden() {
+    ak_ziel=$(ak_dienste)
+    [ -n "$ak_ziel" ] || return 0
+    kill $ak_ziel 2>/dev/null
+    ak_i=0
+    while [ $ak_i -lt 10 ] && [ -n "$(ak_dienste)" ]; do
+        sleep 1
+        ak_i=$((ak_i + 1))
+    done
+    ak_rest=$(ak_dienste)
+    [ -n "$ak_rest" ] && kill -9 $ak_rest 2>/dev/null
+    echo $ak_ziel
+}
+
 # ---------- 1. Anlage freigeben ----------
 # Nur versuchen, wenn die Steuerung freigegeben war. War sie es nie, hat
 # dieses Plugin auch nie einen Sollwert gesetzt, und ein Schreibbefehl beim
@@ -64,13 +122,32 @@ fi
 PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
 if [ -f "$PID" ]; then
     P=$(cat "$PID" 2>/dev/null)
-    # Nur hart beenden, wenn der Prozess noch lebt UND nachweislich unser
-    # Skript ist - Prozessnummern werden wiederverwendet.
-    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null \
-       && grep -qa "ankersolix.py" "/proc/$P/cmdline" 2>/dev/null; then
-        kill -9 "$P" 2>/dev/null || true
+    # Nur beenden, wenn der Prozess noch lebt UND argumentweise unser Dienst
+    # ist - Prozessnummern werden wiederverwendet. Erst freundlich, bis zu zehn
+    # Sekunden Zeit, dann hart: der Dienst haelt eine offene HTTP-Sitzung zur
+    # Anker-Cloud und schreibt seine Dateien ueber os.replace(); ein SIGKILL
+    # genau dazwischen laesst Unfertiges liegen (dieselbe Begruendung wie in
+    # preupgrade.sh).
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && ak_ist_dienst "$P"; then
+        kill "$P" 2>/dev/null || true
+        i=0
+        while [ $i -lt 10 ] && kill -0 "$P" 2>/dev/null && ak_ist_dienst "$P"; do
+            sleep 1
+            i=$((i + 1))
+        done
+        if kill -0 "$P" 2>/dev/null && ak_ist_dienst "$P"; then
+            kill -9 "$P" 2>/dev/null || true
+        fi
     fi
     rm -f "$PID"
+fi
+# Dazu jeder eigene Dienst OHNE PID-Datei: ein zweiter, den der Minutentakt
+# waehrend eines fruehreren Upgrades gestartet hat, hat keine. In WSL gemessen
+# (Pruefung-AnkerSolix-0.9.17, Fall 7): ohne diesen Schritt lief er nach dem
+# Entfernen des Plugins weiter - mit einem Dienstskript, das es nicht mehr gibt.
+WAISEN=$(ak_dienste_beenden)
+if [ -n "$WAISEN" ]; then
+    echo "<INFO> Ein Dienst ohne PID-Datei lief und wurde beendet (PID $WAISEN)."
 fi
 
 # ---------- 3. Sicherungen und Daten abraeumen ----------
