@@ -47,6 +47,43 @@ if ($ak_p['home'] !== '' && is_file($ak_p['home'] . '/libs/phplib/loxberry_syste
     require_once $ak_p['home'] . '/libs/phplib/loxberry_web.php';
 }
 
+/* ---------------- Waehrend einer Aktualisierung: nur ein Hinweis ----------
+ *
+ * Das steht VOR jedem ak_config() und vor jedem Handler. Wer erst die
+ * Konfiguration anlegt und dann sperrt, hat schon geschrieben: in der Luecke
+ * ist config/plugins/<ordner>/ abgeraeumt, und ak_config(true) legt sie aus
+ * der Zweitschrift neu an (Fall L3c).
+ *
+ * Gemessen (WSL, 18.09.2026, Pruefung-AnkerSolix-0.9.18): ohne diese Sperre
+ * kostete ein Speichern in der Luecke das Anker-Kontopasswort (L4d), und der
+ * Knopf "Dienst starten" liess den Dienst mit der leeren Zugangsdatei
+ * anlaufen (L5b). Dieselbe Bauart wie Intercom 2.2.11.
+ *
+ * Der unangemeldete Endpunkt (webfrontend/html/index.php) sperrt bewusst
+ * NICHT: er schreibt keine Einstellungen, und ein abgewiesener Schaltbefehl
+ * des Miniservers ginge still verloren - ein Virtueller Ausgang wertet die
+ * Antwort nicht aus. Er reiht ihn ein, und der Dienst arbeitet ihn nach der
+ * Installation ab (Fall L6).
+ */
+if (ak_upgrade_laeuft()) {
+    $ak_rahmen = class_exists('LBWeb', false);
+    if ($ak_rahmen) {
+        LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/', 'help.html');
+    }
+    echo '<div style="max-width:980px;margin:0 auto;'
+       . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
+       . '<h2 style="color:#6dac20">Anker SOLIX</h2>' . "\n"
+       . '<div style="border-radius:8px;padding:10px 14px;margin:12px 0;'
+       . 'background:#fdf3e3;border:1px solid #e0620d"><b>'
+       . ak_e(ak_t('HINWEIS.UPGRADE_LAEUFT')) . '</b> '
+       . ak_e(ak_t('HINWEIS.UPGRADE_NICHT_GESPEICHERT'))
+       . '</div>' . "\n" . '</div>' . "\n";
+    if ($ak_rahmen) {
+        LBWeb::lbfooter();
+    }
+    exit;
+}
+
 /* ---------------- Die Reiterliste steht genau einmal ----------------
  *
  * Aus diesem Feld entsteht der Pruefausdruck fuer 'activetab'. Die Leiste

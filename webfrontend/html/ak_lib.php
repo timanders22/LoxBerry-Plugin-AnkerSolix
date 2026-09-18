@@ -479,6 +479,63 @@ function ak_alter()
     return isset($l['ts']) ? max(0, time() - (int) $l['ts']) : -1;
 }
 
+/* ---------------- Laeuft gerade eine Aktualisierung? ---------------- */
+
+/**
+ * Der Ablageort der Marke: NEBEN dem Datenordner, nicht darin.
+ *
+ * purge_installation loescht data/plugins/<ordner>/ bei jedem Upgrade
+ * (Regeln/06); eine Marke darin waere genau dann weg, wenn sie gebraucht wird.
+ */
+function ak_upgrade_marke()
+{
+    $d = ak_paths()['datadir'];
+    return dirname($d) . '/' . basename($d) . '.upgrade_laeuft';
+}
+
+/**
+ * preupgrade.sh legt die Marke als Erstes an, postinstall.sh entfernt sie per
+ * trap. Dazwischen ist config/plugins/<ordner>/ abgeraeumt - und was die
+ * Oberflaeche in dieser Zeit anrichtet, ist gemessen (WSL, 18.09.2026,
+ * Pruefung-AnkerSolix-0.9.18):
+ *
+ *   Fall L4  Ein Speichern schreibt zugang.json mit LEEREM Passwort. Die
+ *            Kontofelder sind in der Luecke leer, weil die Datei fehlt, und
+ *            ein leeres Passwortfeld loescht sonst absichtlich nichts - hier
+ *            gibt es aber nichts mehr, was es bewahren koennte.
+ *            postinstall.sh spielt die Sicherung danach NICHT ein: die Datei
+ *            hat "Inhalt". Das Anker-Kontopasswort war nach dem Upgrade fort.
+ *   Fall L5  Danach startete der Knopf "Dienst starten" den Dienst mitten in
+ *            der Aktualisierung, mit ebendieser leeren Zugangsdatei.
+ *   Fall G8  Dasselbe Speichern AUSSERHALB der Luecke haelt Passwort und
+ *            Aktionstoken. Der Schaden haengt an der Luecke, nicht am Knopf.
+ *
+ * Deshalb sperrt diese Linie die Oberflaeche - wie Intercom 2.2.11, anders
+ * als Sprachsteuerung 0.11.7, wo nichts verlorenging (Regeln/06: das ist eine
+ * Messung, keine Regel).
+ *
+ * Aelter als eine Stunde oder unlesbar gilt die Marke nicht: eine
+ * abgebrochene Installation darf die Seite nicht fuer immer stilllegen.
+ */
+function ak_upgrade_laeuft()
+{
+    $f = ak_upgrade_marke();
+    if (!@is_file($f)) {
+        return false;
+    }
+    $roh = @file_get_contents($f);
+    if ($roh === false) {
+        return false;
+    }
+    $roh = trim((string) $roh);
+    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+        return false;
+    }
+    $alter = time() - (int) $roh;
+    // Ein paar Minuten "Zukunft" sind eine nachgestellte Uhr, keine Luege.
+    return $alter > -300 && $alter < 3600;
+}
+
 /* ---------------- Dienst ---------------- */
 
 /**

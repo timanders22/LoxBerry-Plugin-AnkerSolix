@@ -10,6 +10,34 @@ ARGV5=$5
 PFOLDER="${ARGV3:-ankersolix}"
 BASE="${ARGV5:-$LBHOMEDIR}"
 
+# ---------- Zuerst die Marke "Aktualisierung laeuft" ----------
+#
+# Der Installer legt die Cron-Datei rund eine Minute VOR postinstall.sh neu an
+# (Regeln/06, am Geraet gemessen: preupgrade 03:31:30, Cron 03:31:32,
+# postinstall 03:32:24). In dieser Luecke ist config/plugins/<ordner>/ bereits
+# abgeraeumt, die Oberflaeche aber erreichbar.
+#
+# Was das hier kostet, ist am 18.09.2026 in WSL gemessen
+# (Pruefung-AnkerSolix-0.9.18): die Oberflaeche zeigt in der Luecke zwei leere
+# Kontofelder; ein Speichern schreibt eine zugang.json ohne Passwort, und
+# postinstall.sh spielt die Sicherung dann nicht mehr ein - das
+# Anker-Kontopasswort war nach dem Upgrade fort (Fall L4d). Danach liess sich
+# der Dienst ueber den Knopf in der Luecke mit dieser leeren Datei starten
+# (Fall L5b). Die Gegenprobe ausserhalb der Luecke ist gruen (Fall G8c): das
+# Loch ist die Luecke, nicht das Speichern.
+#
+# Die Marke liegt NEBEN dem Datenordner - purge_installation loescht den
+# Ordner selbst. Sie faellt zuerst, noch vor dem Anhalten: zwischen dem ersten
+# Befehl dieses Skripts und dem Anhalten kann der Minutentakt laufen.
+mkdir -p "$BASE/data/plugins" 2>/dev/null
+date +%s > "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" 2>/dev/null
+if [ -s "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" ]; then
+    echo "<OK> Dienststart und Oberflaeche bis zum Ende der Installation gesperrt."
+else
+    echo "<INFO> Die Marke fuer die laufende Aktualisierung liess sich nicht"
+    echo "<INFO> anlegen ($BASE/data/plugins/$PFOLDER.upgrade_laeuft)."
+fi
+
 # Anhalten ueber das Dienstskript, nicht von Hand.
 #
 # Frueher stand hier: kill, zwei Sekunden warten, dann BEDINGUNGSLOS kill -9.

@@ -194,6 +194,27 @@ function ak_pruefungen()
         $zeilen[] = ak_pruefzeile(1, ak_t('TEST.F_WAECHTER'), ak_t('TEST.A_WAECHTER_NIE'));
     }
 
+    // Die Marke "Aktualisierung laeuft". Zu jeder Regel gehoert das Werkzeug,
+    // das sie findet (CLAUDE.md, 6): eine liegengebliebene Marke sperrt den
+    // Dienststart bis zu einer Stunde, und ohne diese Zeile stuende nirgends,
+    // warum. Erreichbar ist der Reiter nur, solange sie NICHT gilt - die Seite
+    // haelt sonst schon am Eingang an. Uebrig bleibt der Fall "liegt noch da,
+    // gilt aber nicht mehr".
+    $marke = ak_upgrade_marke();
+    if (!is_file($marke)) {
+        $zeilen[] = ak_pruefzeile(1, ak_t('TEST.F_UPGRADE_MARKE'), ak_t('TEST.A_UPGRADE_MARKE_KEINE'));
+    } else {
+        $roh = trim((string) @file_get_contents($marke));
+        if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+            $zeilen[] = ak_pruefzeile(0, ak_t('TEST.F_UPGRADE_MARKE'),
+                sprintf(ak_t('TEST.A_UPGRADE_MARKE_UNLESBAR'), ak_e($marke)));
+        } else {
+            $zeilen[] = ak_pruefzeile(0, ak_t('TEST.F_UPGRADE_MARKE'),
+                sprintf(ak_t('TEST.A_UPGRADE_MARKE_ALT'),
+                    date('d.m.Y H:i:s', (int) $roh), (int) (time() - (int) $roh), ak_e($marke)));
+        }
+    }
+
     /* --- 4. Konto --- */
     $zeilen[] = ak_pruefzeile($z['email'] !== '' && strpos($z['email'], '@') !== false ? 1 : 0,
         ak_t('TEST.F_KONTO'),

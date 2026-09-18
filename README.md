@@ -16,6 +16,60 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.18 — während einer Aktualisierung kostete ein Klick das Anker-Passwort
+
+Zwischen `preupgrade.sh` und `postinstall.sh` liegt eine Lücke von rund einer
+Minute. In dieser Zeit hat der Installer `config/plugins/ankersolix/` bereits
+abgeräumt, die Oberfläche ist aber erreichbar, und der Minutentakt läuft weiter.
+Was das für dieses Plugin bedeutet, ist am 18.09.2026 in einem Wegwerfbaum unter
+Linux gemessen worden (66 Fälle, Prüfstand `Pruefung-AnkerSolix-0.9.18`):
+
+- Die Oberfläche zeigte in dieser Zeit **zwei leere Kontofelder** an, weil die
+  Zugangsdatei gerade gelöscht war. Wer dort auf *Einstellungen speichern*
+  drückte, schrieb eine `zugang.json` **ohne Passwort** — und `postinstall.sh`
+  spielte die Sicherung danach nicht mehr ein, weil die Datei ja „Inhalt" hatte.
+  Das Anker-Kontopasswort war nach dem Update fort (Fall L4d).
+- Direkt danach ließ sich der Dienst über den Knopf *Dienst starten* mitten in
+  der Aktualisierung anwerfen — mit ebendieser leeren Zugangsdatei (Fall L5b).
+- Dasselbe Speichern **außerhalb** der Lücke ist unauffällig (Fall G8c). Der
+  Schaden hängt an der Lücke, nicht am Knopf.
+
+`preupgrade.sh` legt deshalb jetzt als **Erstes** die Marke
+`data/plugins/ankersolix.upgrade_laeuft` mit der Unixzeit an — neben dem
+Datenordner, weil der Installer den Ordner selbst löscht. Solange sie gilt,
+
+- startet `bin/dienst.sh` den Dienst nicht und meldet den Grund,
+- zeigt die Oberfläche nur einen Hinweis und nimmt nichts entgegen.
+
+Eine Marke, die älter als eine Stunde ist, aus der Zukunft stammt oder keine
+lesbare Zeit enthält, gilt **nicht** — eine abgebrochene Installation darf das
+Plugin nicht dauerhaft stilllegen. Lässt sich die Uhr nicht lesen, gilt sie
+dagegen sehr wohl: ein Schutz fällt geschlossen aus. `postinstall.sh` entfernt
+sie über einen `trap`, also auch nach einem Abbruch, und startet den Dienst als
+letzten Schritt ausdrücklich mit `--trotz-marke`; dadurch kann der Minutentakt
+in genau dieser Sekunde keinen zweiten Dienst danebenstellen (Fall G7a: 200
+Wächterläufe während der Installation, danach genau ein Dienst).
+
+`uninstall/uninstall` räumt die Marke weg und dazu den Merker
+`config/plugins/ankersolix.backup.lief`, der bisher liegenblieb und eine spätere
+**Neu**installation den Dienst hätte anwerfen lassen.
+
+Der unangemeldete Endpunkt für den Miniserver sperrt **nicht**: er weist
+schreibende Befehle ohnehin ab, solange kein Dienst läuft, und ein zusätzlich
+abgewiesener Befehl ginge still verloren — ein Virtueller Ausgang wertet die
+Antwort nicht aus (Fall L6b).
+
+Im Reiter *Test* steht eine neue Zeile: liegt eine Marke, und wie alt ist sie?
+Sie ist nur zu sehen, wenn die Marke nicht mehr gilt — sonst hält die Seite
+schon am Eingang an.
+
+Geändert: `preupgrade.sh`, `postinstall.sh`, `uninstall/uninstall`,
+`bin/dienst.sh`, `webfrontend/html/ak_lib.php`,
+`webfrontend/htmlauth/index.php`, `webfrontend/htmlauth/ak_test.php` und beide
+Sprachdateien. Die argumentweise Diensterkennung (0.9.17) und die Rückstellung
+der Anlage auf Eigenverbrauch beim Deinstallieren (0.9.16) sind unverändert und
+mitgemessen.
+
 ## Version 0.9.17 — „angehalten" traf den Falschen und ließ den Richtigen stehen
 
 Das Plugin erkannte seinen eigenen Dienst an einer **Teilzeichenkette** der

@@ -160,6 +160,19 @@ for f in ankersolix.json zugang.json; do
 done
 rm -rf "$BASE/data/plugins/$PFOLDER"
 
+# Die beiden Merker, die preupgrade.sh NEBEN den Ordnern anlegt. Sie
+# ueberstehen jedes Abraeumen des Installers, weil sie eine Ebene darueber
+# liegen - genau deshalb gibt es sie.
+#
+#   .upgrade_laeuft  wuerde eine Stunde lang jeden Dienststart und die
+#                    Oberflaeche einer NEUinstallation sperren;
+#   .backup.lief     wuerde eine Neuinstallation den Dienst anwerfen lassen,
+#                    obwohl es noch keine Zugangsdaten gibt - postinstall.sh
+#                    meldet dann "lief vor dem Upgrade, liess sich aber nicht
+#                    starten", und niemand versteht, wovon die Rede ist.
+rm -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+rm -f "$BASE/config/plugins/$PFOLDER.backup.lief"
+
 echo "<OK> Anker SOLIX entfernt, $ANZAHL Sicherungsdatei(en) geloescht."
 echo "<INFO> Das Anker-Konto selbst ist davon nicht beruehrt."
 exit 0

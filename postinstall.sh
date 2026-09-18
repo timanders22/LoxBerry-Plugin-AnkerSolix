@@ -31,6 +31,28 @@ PLOG="$BASE/log/plugins/$PFOLDER"
 PCONFIG="$BASE/config/plugins/$PFOLDER"
 VENV="$PBIN/venv"
 
+# ---------- Die Marke "Aktualisierung laeuft" ----------
+#
+# preupgrade.sh hat sie angelegt; dieses Skript ist das letzte Hakenskript
+# dieser Linie (postupgrade.sh ruft nur hierher weiter, ein postroot.sh gibt
+# es nicht). Entfernt wird sie ueber einen trap und nicht am Dateiende: dieses
+# Skript steigt an sieben Stellen mit "exit 1" aus (Architektur, Python, venv,
+# pip, Ladeprobe). Ohne den trap bliebe der Dienst nach einer gescheiterten
+# Installation eine Stunde gesperrt, ohne dass irgendwo stuende, warum
+# (Regeln/06, Nachtrag vom 17.09.2026). In WSL gemessen am 18.09.2026,
+# Fall G3b: Abbruch mit Rueckgabewert 1, Marke danach weg.
+#
+# Der Rueckgabewert wird gerettet und zurueckgegeben - ein EXIT-trap, der mit
+# dem Wert seines letzten Befehls endet, macht aus einem Abbruch eine
+# gelungene Installation.
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+ak_marke_weg() {
+    ak_rc=$?
+    rm -f "$MARKE" 2>/dev/null
+    return "$ak_rc"
+}
+trap ak_marke_weg EXIT
+
 # Fassung der Bibliothek. Auf einen Tag festgenagelt, damit eine Installation
 # von heute morgen und eine von heute abend dasselbe ergeben. Der Tag v3.6.3
 # ist auf der Release-Seite des Projekts nachgesehen, nicht geraten.
@@ -237,9 +259,18 @@ chmod 600 "$PCONFIG/zugang.json"
 # das Plugin still, bis jemand von Hand auf "Dienst starten" drueckte - und
 # weil `soll_laufen` im abgeraeumten Datenordner lag, griff auch der
 # minuetliche Waechter nicht. Uebernommen von Weissware 0.9.18.
+#
+# Die Marke liegt hier noch - sie faellt erst mit dem trap, also NACH diesem
+# Start. Das ist Absicht: waehrend dieser Sekunde kann der Minutentakt laufen,
+# und er soll genau jetzt nichts anfangen. "--trotz-marke" ist die Ausnahme
+# fuer diesen einen Aufruf. Waere die Marke stattdessen vor dem Start
+# entfernt worden, faende ein Waechterlauf zwischen dem "touch" auf
+# soll_laufen und dem Erscheinen des Prozesses keinen Dienst und legte einen
+# zweiten an. Gemessen am 18.09.2026, Fall G7a: 200 Waechterlaeufe waehrend
+# der Installation, danach genau ein Dienst.
 LIEF="$BASE/config/plugins/$PFOLDER.backup.lief"
 if [ -f "$LIEF" ]; then
-    if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" start >/dev/null 2>&1; then
+    if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" start --trotz-marke >/dev/null 2>&1; then
         echo "<OK> Der Dienst wurde wieder gestartet."
     else
         echo "<INFO> Der Dienst lief vor dem Upgrade, liess sich aber nicht"

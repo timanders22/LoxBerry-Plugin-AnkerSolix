@@ -50,6 +50,17 @@ PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
+# Die Marke "Aktualisierung laeuft". Sie liegt NEBEN dem Datenordner, weil
+# purge_installation den Ordner selbst loescht (Regeln/06). preupgrade.sh legt
+# sie als Erstes an, postinstall.sh entfernt sie per trap - auch nach einem
+# Abbruch.
+MARKE="$LBHOMEDIR/data/plugins/$PNAME.upgrade_laeuft"
+# Nur postinstall.sh setzt das: dort ist die Marke die eigene, und der Start
+# ist der letzte Schritt der Installation. Als ARGUMENT, nicht als
+# Umgebungsvariable - der Abstieg auf loxberry oben laeuft ueber su, und was
+# su von der Umgebung durchreicht, ist hier nicht gemessen; die Argumente
+# reicht die Zeile nachweislich durch ("$0" "$@").
+AK_TROTZ_MARKE=0
 LOGDATEI="$PLOG/ankersolix.log"
 # Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
 # Starts und alles, was das Python-Skript nach stderr schreibt, bevor sein
@@ -145,7 +156,44 @@ laeuft() {
     [ -n "$(dienste)" ]
 }
 
+# ---------- Laeuft gerade eine Aktualisierung? ----------
+#
+# Gemessen am 18.09.2026 in WSL (Pruefung-AnkerSolix-0.9.18, Faelle L4/L5):
+# in der Luecke zwischen preupgrade.sh und postinstall.sh ist
+# config/plugins/<ordner>/ weg. Die Oberflaeche zeigt dann zwei leere
+# Kontofelder an; wer dort speichert, schreibt eine zugang.json OHNE Passwort,
+# und postinstall.sh spielt die Sicherung nicht mehr ein, weil die Datei
+# "Inhalt" hat. Der Knopf "Dienst starten" liess den Dienst danach MIT dieser
+# leeren Zugangsdatei anlaufen (Fall L5b, 1 Prozess in der Luecke).
+#
+# Nur eine Marke, die hoechstens eine Stunde alt ist, zaehlt. Aelter, aus der
+# Zukunft oder unlesbar: eine abgebrochene Installation hat sie liegen lassen,
+# und der Dienst darf nicht fuer immer stillstehen.
+#
+# Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts - unter Last
+# kann ein fork scheitern -, dann rechnete die Schale mit einer leeren
+# Zeichenkette, das Alter fiele negativ aus und der Dienst startete MITTEN in
+# der Aktualisierung. Ein Schutz faellt geschlossen aus (Regeln/01): ohne Uhr
+# gilt die Marke.
+marke_gilt() {
+    [ -f "$MARKE" ] || return 1
+    ak_seit=$(cat "$MARKE" 2>/dev/null)
+    case "$ak_seit" in ''|*[!0-9]*) ak_seit=0 ;; esac
+    ak_jetzt=$(date +%s 2>/dev/null)
+    case "$ak_jetzt" in ''|*[!0-9]*) ak_jetzt="" ;; esac
+    [ -z "$ak_jetzt" ] && return 0
+    ak_alter=$(( ak_jetzt - ak_seit ))
+    # Ein paar Minuten "Zukunft" sind eine nachgestellte Uhr, keine Luege.
+    [ "$ak_alter" -ge -300 ] && [ "$ak_alter" -lt 3600 ]
+}
+
 starten() {
+    if [ "$AK_TROTZ_MARKE" != "1" ] && marke_gilt; then
+        # Ende mit 0: eine laufende Aktualisierung ist kein Fehler. Der
+        # Waechter soll deshalb auch keine Fehlerzeile schreiben.
+        echo "Eine Aktualisierung dieses Plugins laeuft - der Dienst wird danach gestartet."
+        return 0
+    fi
     LAUFEND=$(dienste)
     if [ -n "$LAUFEND" ]; then
         ERSTE=$(printf '%s\n' "$LAUFEND" | head -n 1)
@@ -225,7 +273,13 @@ anhalten() {
 }
 
 case "$1" in
-    start)   starten ;;
+    start)
+        # "--trotz-marke" kommt ausschliesslich aus postinstall.sh.
+        if [ "${2:-}" = "--trotz-marke" ]; then
+            AK_TROTZ_MARKE=1
+        fi
+        starten
+        ;;
     stop)    anhalten ;;
     restart) anhalten; sleep 1; starten ;;
     status)
@@ -259,7 +313,7 @@ case "$1" in
         fi
         ;;
     *)
-        echo "Aufruf: $0 {start|stop|restart|status|waechter}"
+        echo "Aufruf: $0 {start [--trotz-marke]|stop|restart|status|waechter}"
         exit 2
         ;;
 esac
