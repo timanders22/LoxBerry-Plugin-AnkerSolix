@@ -16,6 +16,54 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.19 — die Sicherung wird nach Inhalt beurteilt, und das Plugin schreibt nur aus der Installation
+
+Gemessen am 18.09.2026 in einem Wegwerfbaum unter Linux (81 Fälle, Prüfstand
+`Pruefung-AnkerSolix-0.9.19`; am veröffentlichten Stand 0.9.18 waren 34 davon
+rot, jetzt keiner).
+
+**Sichern und Zurückspielen.** Ob eine Datei „Inhalt" trägt, entschieden die
+Hakenskripte bisher danach, ob irgendwo ein Anführungszeichen steht. Eine
+abgeschnittene Datei hat eines, ein `{"email":"","passwort":""}` ebenso.
+
+- `postinstall.sh` spielte die heile Sicherung deshalb nicht zurück, wenn
+  `ankersolix.json` oder `zugang.json` abgeschnitten war oder kein Passwort
+  trug. Jetzt heißt Inhalt: ein lesbares JSON-Objekt **mit** Aktionstoken
+  bzw. **mit** Passwort. Zurückgespielt wird nur eine Sicherung, die selbst
+  Inhalt trägt; ein verdrängter Stand bleibt als `<datei>.kaputt` (0600)
+  liegen. Eine Sicherung, die nur `{}` enthält, wird nicht mehr als
+  „wiederhergestellt" gemeldet.
+- `preupgrade.sh` kopierte ungeprüft **direkt auf** die Sicherung. Eine
+  abgeschnittene oder passwortlose Datei verdrängte so die heile Sicherung,
+  und ein beim Schreiben abgebrochenes `cp` (volle Karte) hinterließ weder die
+  alte noch eine vollständige neue. Jetzt wird nur ein Stand mit Inhalt
+  gesichert, über eine Nebendatei, die nachgelesen und dann umbenannt wird.
+- `preupgrade.sh` meldet, was geschah: „angehalten" nur, wenn `dienst.sh stop`
+  das sagt; die Zusage „wird nach dem Upgrade wieder gestartet" nur, wenn der
+  Merker dafür wirklich liegt; die Schlusszeile ist eine Warnung, sobald eine
+  Sicherung nicht geschrieben werden konnte.
+
+**Wurzel und Ordnername.** `bin/dienst.sh` rechnete die LoxBerry-Wurzel aus
+dem eigenen Ablageort und legte bei **jedem** Aufruf, auch bei `status`, den
+Daten- und den Logordner an. Aus einem Prüfarchiv unter
+`<Wurzel>/pruefung/ankersolix/bin` entstanden so in der laufenden Anlage die
+Ordner `data/plugins/bin` und `log/plugins/bin`; aus einer Kopie des ganzen
+Baums lief ein zweiter Dienst am selben Anker-Konto an. Jetzt wird die Wurzel
+aus `$LBHOMEDIR` gelesen (sonst aufwärts gesucht, erst zuletzt gerechnet),
+angelegt wird nur beim Start, und `start`, `stop`, `restart` und `waechter`
+arbeiten nur, wenn das Skript unter `<Wurzel>/bin/plugins/<ordner>` liegt.
+`bin/ankersolix.py` hatte dieselbe Rechnung (`SELF.parents[2]`) und ist
+ebenso umgestellt; `--selbsttest` läuft weiterhin überall, legt außerhalb der
+Installation aber nichts an.
+
+**Zweitinstallation.** Liegt eine zweite Installation unter einem anderen
+Ordnernamen (etwa `ankersolix01`) und fehlt ihr Konfigurationsordner — genau
+das ist in der Lücke einer Aktualisierung der Fall —, fiel die Oberfläche auf
+den Ordner `ankersolix` zurück. Die Sperre während der Aktualisierung sah
+dann auf die fremde Marke, und ein Speichern schrieb in die Zugangsdaten des
+**anderen** Plugins (die E-Mail des Anker-Kontos war danach leer). In der
+Installationslage gilt jetzt allein der eigene Ordnername.
+
 ## Version 0.9.18 — während einer Aktualisierung kostete ein Klick das Anker-Passwort
 
 Zwischen `preupgrade.sh` und `postinstall.sh` liegt eine Lücke von rund einer

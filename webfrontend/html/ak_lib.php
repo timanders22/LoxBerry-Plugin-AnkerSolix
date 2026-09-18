@@ -73,7 +73,19 @@ function ak_paths()
     // er wird aus Autorenname, E-Mail und Plugin-Name gebildet und aendert
     // sich bei jedem Fork.
     $dir = basename(dirname(__FILE__));
-    if ($home && !is_dir($home . '/config/plugins/' . $dir)) {
+    // Der Rueckfall unten gilt nur AUSSERHALB der Installationslage (ausgepacktes
+    // Archiv, Sandkasten: dort heisst der Ordner "html"). Liegt diese Datei
+    // unter <home>/webfrontend/html/plugins/<ordner>/, IST <ordner> der Name -
+    // auch wenn config/plugins/<ordner>/ gerade fehlt. Bis 0.9.18 fiel eine
+    // Zweitinstallation "ankersolix01" in ihrer Upgrade-Luecke (Konfigordner
+    // abgeraeumt) auf "ankersolix" zurueck: die Sperre sah auf die fremde
+    // Marke, und ein Speichern schrieb in die Zugangsdaten des ANDEREN Plugins
+    // (WSL, Pruefung-AnkerSolix-0.9.19, Faelle P3/P4; Regeln/06, "Ein Rueckfall
+    // auf den vorgesehenen Ordnernamen ...").
+    $ak_hier = @realpath(dirname(__FILE__));
+    $ak_soll = $home ? @realpath($home . '/webfrontend/html/plugins/' . $dir) : false;
+    $installiert = ($ak_hier !== false && $ak_soll !== false && $ak_hier === $ak_soll);
+    if ($home && !$installiert && !is_dir($home . '/config/plugins/' . $dir)) {
         foreach (array(getenv('LBPPLUGINDIR'), 'ankersolix') as $kand) {
             if ($kand && is_dir($home . '/config/plugins/' . $kand)) {
                 $dir = $kand;

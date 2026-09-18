@@ -1,7 +1,8 @@
 #!/bin/bash
 # Anker SOLIX - Start, Stopp und Waechter des Abrufdienstes.
 #
-# Die Pfade werden aus dem EIGENEN Ablageort abgeleitet, nicht ueber
+# Der Ordnername kommt aus dem EIGENEN Ablageort, die Wurzel aus $LBHOMEDIR
+# (weiter unten, mit Abgleich gegen den Ablageort) - nicht ueber
 # LoxBerry::System. Grund: LoxBerry::System leitet den Pluginordner aus dem
 # Aufrufort ab; wird dieses Skript aus postinstall.sh oder aus dem Cron
 # gestartet, kommt dort ueberall Leerstring zurueck - das Skript werkelt dann
@@ -42,9 +43,58 @@ if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
     exec su -s /bin/bash loxberry -c "$(printf '%q ' "$0" "$@")"
 fi
 
-SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # <home>/bin/plugins/<ordner>
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)   # <home>/bin/plugins/<ordner>
 PNAME=$(basename "$SELF")
-LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+
+# Die Wurzel wird GELESEN, nicht geraten (Regeln/03, Stufe 1 ist $LBHOMEDIR;
+# Vorlage lb_wurzel_suchen() in Regeln/06; Bestand-2026-09-18/klasse-H,
+# Bauart H1).
+#
+# Bis 0.9.18 stand hier  LBHOMEDIR=$(cd "$SELF/../../.." && pwd)  - das
+# UEBERSCHRIEB ein gesetztes $LBHOMEDIR mit einer Rechnung aus dem Ablageort,
+# und weiter unten legte ein "mkdir -p" bei JEDEM Aufruf die Ordner an. In WSL
+# gemessen (Bestand-2026-09-18/klasse-H, Fall M7; Pruefung-AnkerSolix-0.9.19,
+# Faelle H1-H4): ein "dienst.sh status" aus einem Pruefarchiv unter
+# <Wurzel>/pruefung/ankersolix/bin legte in der laufenden Anlage
+# data/plugins/bin und log/plugins/bin an. Und aus einer Kopie des ganzen
+# Baums lief ein ZWEITER Dienst an, der dasselbe Anker-Konto abfragt (H8).
+#
+# Drei Stufen, in dieser Reihenfolge:
+#   1. $LBHOMEDIR aus der Umgebung, wenn es eine Wurzel bezeichnet (am Geraet
+#      steht es in /etc/environment, der Cron laedt es ueber pam_env),
+#   2. aufwaerts suchen, bis ein Verzeichnis config/plugins, data/plugins UND
+#      config/system/general.json traegt,
+#   3. drei Ebenen ueber dem Ablageort - das bisherige Verhalten.
+ak_wurzel_suchen() {
+    ak_v="$SELF"
+    ak_i=0
+    while [ -n "$ak_v" ] && [ "$ak_v" != "/" ] && [ "$ak_i" -lt 8 ]; do
+        if [ -d "$ak_v/config/plugins" ] && [ -d "$ak_v/data/plugins" ] \
+           && [ -f "$ak_v/config/system/general.json" ]; then
+            echo "$ak_v"
+            return 0
+        fi
+        ak_v=$(dirname "$ak_v")
+        ak_i=$((ak_i + 1))
+    done
+    return 1
+}
+if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+   && [ -d "$LBHOMEDIR/data/plugins" ]; then
+    LBHOMEDIR=$(cd "$LBHOMEDIR" && pwd -P)
+else
+    LBHOMEDIR=$(ak_wurzel_suchen) || LBHOMEDIR=$(cd "$SELF/../../.." && pwd -P)
+fi
+
+# Laeuft dieses Skript wirklich AUS der Installation unter dieser Wurzel?
+# Nur dann darf es anlegen, starten und anhalten. Aus einem Pruefarchiv, einem
+# ausgepackten Archiv oder einer Baumkopie heraus waere der Ordnername "bin"
+# oder die Wurzel eine fremde - geschrieben wuerde in die laufende Anlage oder
+# ein zweiter Dienst gestartet. Ein Schutz faellt geschlossen aus (CLAUDE.md 4);
+# "status" liest nur und bleibt erlaubt.
+INSTALLIERT=0
+[ "$SELF" = "$LBHOMEDIR/bin/plugins/$PNAME" ] && INSTALLIERT=1
+
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
 PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
@@ -87,7 +137,11 @@ SKRIPT_R=$(readlink -f "$SKRIPT" 2>/dev/null)
 # eigene. Die Suche ueber /proc sieht nur dessen Prozesse an.
 DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
 
-mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+# Angelegt wird erst beim START (starten()), nicht bei jedem Aufruf. Bis 0.9.18
+# stand hier ein "mkdir -p" auf oberster Ebene: auch "status" und "stop" legten
+# damit an - aus dem Pruefarchiv in der laufenden Anlage (Fall H1), und in der
+# Upgrade-Luecke einen Datenordner, den purge_installation gerade abgeraeumt
+# hatte (Bestand-2026-09-18/klasse-H, Fall M5; hier Fall H7a).
 
 # ---------- Die eigenen Prozesse erkennen ----------
 #
@@ -213,6 +267,7 @@ starten() {
         echo "FEHLER: Zugangsdaten fehlen ($PCONFIG/zugang.json). Erst in der Oberflaeche eintragen."
         return 1
     fi
+    mkdir -p "$PDATA" "$PLOG" 2>/dev/null
     touch "$SOLL"
     # Ausgabe geht in die Startdatei, NICHT in das Protokoll: dort schreibt
     # ausschliesslich der RotatingFileHandler des Python-Skripts. Das Skript
@@ -271,6 +326,19 @@ anhalten() {
     echo "angehalten"
     return 0
 }
+
+# Was schreibt oder Signale schickt, laeuft nur aus der Installation (siehe
+# INSTALLIERT oben). Gemessen: Pruefung-AnkerSolix-0.9.19, Faelle H3, H4, H8.
+case "$1" in
+    start|stop|restart|waechter)
+        if [ "$INSTALLIERT" != "1" ]; then
+            echo "FEHLER: dieses Skript liegt nicht unter $LBHOMEDIR/bin/plugins/$PNAME."
+            echo "FEHLER: Aus einem Pruefarchiv, einem ausgepackten Archiv oder einer Kopie"
+            echo "FEHLER: wird nichts angelegt, gestartet oder angehalten."
+            exit 1
+        fi
+        ;;
+esac
 
 case "$1" in
     start)

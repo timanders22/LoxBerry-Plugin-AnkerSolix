@@ -88,13 +88,48 @@ def mqtt_wert_saeubern(wert):
 # ---------------------------------------------------------------------------
 SELF = Path(__file__).resolve().parent            # <home>/bin/plugins/<ordner>
 PNAME = SELF.name
-# Drei Ebenen darueber liegt das LoxBerry-Wurzelverzeichnis. Liegt das Skript
-# ausnahmsweise flacher (Entwicklung, Pruefaufbau), wird nicht mit einem
-# nackten IndexError abgebrochen, sondern die Umgebungsvariable genommen.
-if len(SELF.parents) >= 3:
-    LBHOME = SELF.parents[2]
-else:
-    LBHOME = Path(os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln())
+
+
+def lb_wurzel_lesen() -> Path:
+    """Die LoxBerry-Wurzel GELESEN, nicht geraten - drei Stufen wie bin/dienst.sh.
+
+    Bis 0.9.18 stand hier "LBHOME = SELF.parents[2]": drei Ebenen ueber dem
+    Ablageort, ein gesetztes LBHOMEDIR zaehlte nur, wenn das Skript flacher
+    lag. In WSL gemessen (Pruefung-AnkerSolix-0.9.19, Faelle Y1/Y2): ein
+    "--selbsttest" oder "--einmal" aus einem Pruefarchiv unter
+    <Wurzel>/pruefung/ankersolix/bin legte in der laufenden Anlage
+    log/plugins/bin und data/plugins/bin an - dieselbe Bauart wie H1 in
+    Bestand-2026-09-18/klasse-H.
+
+      1. LBHOMEDIR, wenn es eine Wurzel bezeichnet,
+      2. aufwaerts suchen bis config/plugins, data/plugins UND
+         config/system/general.json,
+      3. drei Ebenen ueber dem Ablageort (bisheriges Verhalten), bei flacher
+         Lage lb_wurzel_ermitteln().
+    """
+    umg = os.environ.get("LBHOMEDIR") or ""
+    if umg and os.path.isdir(os.path.join(umg, "config", "plugins")) \
+            and os.path.isdir(os.path.join(umg, "data", "plugins")):
+        return Path(umg).resolve()
+    d = SELF
+    for _ in range(8):
+        if (d / "config" / "plugins").is_dir() and (d / "data" / "plugins").is_dir() \
+                and (d / "config" / "system" / "general.json").is_file():
+            return d
+        if d.parent == d:
+            break
+        d = d.parent
+    if len(SELF.parents) >= 3:
+        return SELF.parents[2]
+    return Path(lb_wurzel_ermitteln())
+
+
+LBHOME = lb_wurzel_lesen()
+# Liegt dieses Skript wirklich in der Installation unter dieser Wurzel? Nur
+# dann legt es Ordner an und laeuft als Dienst (main(), log_einrichten()).
+# Aus einem Pruefarchiv waere PNAME "bin", aus einer Baumkopie die Wurzel eine
+# fremde (Faelle Y2, Y5).
+INSTALLIERT = SELF == LBHOME / "bin" / "plugins" / PNAME
 PDATA = LBHOME / "data" / "plugins" / PNAME
 PLOG = LBHOME / "log" / "plugins" / PNAME
 PCONFIG = LBHOME / "config" / "plugins" / PNAME
@@ -352,9 +387,13 @@ class WachsameRotation(RotatingFileHandler):
 # Deskriptor der Shell zeigte danach auf die weggeschobene Datei.
 # ---------------------------------------------------------------------------
 def log_einrichten() -> None:
-    PLOG.mkdir(parents=True, exist_ok=True)
     _LOG.setLevel(logging.INFO)
     try:
+        # Ausserhalb der Installation (Pruefarchiv) wird nichts angelegt: der
+        # Ordner laege in der laufenden Anlage, unter dem Namen "bin" (Y1).
+        if not INSTALLIERT:
+            raise OSError(f"{SELF} liegt nicht unter {LBHOME}/bin/plugins/{PNAME}")
+        PLOG.mkdir(parents=True, exist_ok=True)
         h = WachsameRotation(DATEI_LOG, maxBytes=512000, backupCount=1, encoding="utf-8")
     except OSError as err:
         # Scheitert die Datei, nach stderr - nicht nach stdout.
@@ -1821,6 +1860,15 @@ def main() -> int:
     if "--vorgaben" in sys.argv:
         print(json.dumps(VORGABEN, ensure_ascii=False, sort_keys=True))
         return 0
+    # Dienst, Einmallauf und Freigabe schreiben in Daten- und Logordner. Aus
+    # einem Pruefarchiv oder einer Baumkopie heraus waere das die laufende
+    # Anlage bzw. ein zweiter Dienst am selben Anker-Konto (Faelle Y2, Y5).
+    # Der Selbsttest liest nur und bleibt erlaubt.
+    if not INSTALLIERT and "--selbsttest" not in sys.argv:
+        print(f"FEHLER: {SELF} liegt nicht unter {LBHOME}/bin/plugins/{PNAME} - "
+              "aus einem ausgepackten Archiv oder einer Kopie wird nichts gestartet.",
+              file=sys.stderr)
+        return 1
     log_einrichten()
     if "--selbsttest" in sys.argv:
         return selbsttest()

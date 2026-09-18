@@ -72,19 +72,92 @@ if [ ! -f "$PCONFIG/zugang.json" ]; then
 fi
 chmod 600 "$PCONFIG/zugang.json"
 
+# ---------- INHALT statt Anfuehrungszeichen ----------
+#
+# Wortgleich in preupgrade.sh - ein Hakenskript kann sich nichts aus dem
+# Plugin-Ordner holen. "Inhalt" heisst: ein lesbares JSON-Objekt MIT dem
+# Geheimnis der Datei - in ankersolix.json das Aktionstoken (ohne es erreicht
+# der Miniserver den Endpunkt nicht mehr), in zugang.json das Passwort des
+# Anker-Kontos (die Oberflaeche kann es nicht loeschen, nur ersetzen: ein
+# leeres Passwortfeld laesst das gespeicherte stehen, ak_zugang_speichern()).
+#
+# Rueckgabe: 0 = traegt Inhalt, 1 = fehlt, leer oder "{}",
+#            3 = da, aber ohne Inhalt (kein gueltiges JSON-Objekt oder ohne
+#                das Geheimnis), 2 = NICHT PRUEFBAR (kein php).
+ak_inhalt() {   # $1 Datei, $2 Art: konf | zugang
+    [ -f "$1" ] || return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $roh = @file_get_contents($argv[1]);
+        if ($roh === false) { exit(3); }
+        $t = trim($roh);
+        if ($t === "" || $t === "{}") { exit(1); }
+        $d = json_decode($t, true);
+        if (!is_array($d) || count($d) === 0) { exit(3); }
+        if ($argv[2] === "zugang") {
+            $ok = isset($d["passwort"]) && is_string($d["passwort"]) && $d["passwort"] !== "";
+        } else {
+            $ok = isset($d["aktionstoken"]) && is_string($d["aktionstoken"])
+                  && trim($d["aktionstoken"]) !== "";
+        }
+        exit($ok ? 0 : 3);
+    ' -- "$1" "$2" 2>/dev/null
+    ak_ir=$?
+    case "$ak_ir" in 0|1|3) return "$ak_ir" ;; esac
+    return 2
+}
+
 # Sicherung zurueckspielen (uebersteht Update UND Neuinstallation)
+#
+# Bis 0.9.18 entschied hier  [ ! -s "$CF" ] || ! grep -q '"' "$CF"  - also
+# nur, ob IRGENDWO ein Anfuehrungszeichen steht. Eine abgeschnittene Datei hat
+# eines, ein {"email":"","passwort":""} ebenso: beide galten als Inhalt, und
+# die heile Sicherung kam nicht zurueck. Gemessen: Bestand-2026-09-18/klasse-C,
+# Fall 13; Pruefung-AnkerSolix-0.9.19, Faelle C1-C3. Umgekehrt wurde eine
+# Sicherung, die selbst nur "{}" traegt, eingespielt und als
+# "wiederhergestellt" gemeldet (Fall C7).
+#
+# Eingespielt wird nur, wenn die Datei KEINEN Inhalt traegt UND die Sicherung
+# einen. Ein verdraengter Stand, der nicht bloss leer war, bleibt als
+# <datei>.kaputt (0600) liegen. Kopiert wird in eine Nebendatei, die dann
+# umbenannt wird; gemeldet wird, was nachgelesen wurde, nicht der
+# Rueckgabewert von cp.
 for f in ankersolix.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
-    if [ -f "$BK" ]; then
-        # Nicht auf "{}" vergleichen, sondern fragen, ob ueberhaupt ein
-        # Schluessel drinsteht. Ein Textvergleich haengt daran, ob der
-        # Schreiber Einrueckung oder Leerzeichen setzt - und das entscheidet
-        # dann darueber, ob die Sicherung zurueckkommt oder der Nutzer seine
-        # Einstellungen verliert.
-        if [ ! -s "$CF" ] || ! grep -q '"' "$CF" 2>/dev/null; then
-            cp -p "$BK" "$CF" && echo "<OK> $f aus Sicherung wiederhergestellt."
+    [ -f "$BK" ] || continue
+    case "$f" in zugang.json) ART=zugang ;; *) ART=konf ;; esac
+    ak_inhalt "$CF" "$ART"; CF_RC=$?
+    [ "$CF_RC" = 0 ] && continue
+    if [ "$CF_RC" = 2 ]; then
+        # Ohne php laeuft die Oberflaeche nicht, der Dienst meldet nichts.
+        # Wie bis 0.9.18 wird dann nur eine leere Datei ersetzt - ohne Zusage.
+        if [ ! -s "$CF" ] || [ "$(tr -d ' \t\r\n' < "$CF" 2>/dev/null)" = "{}" ]; then
+            cp -p "$BK" "$CF" 2>/dev/null
+            echo "<WARNING> php fehlt - $f wurde UNGEPRUEFT aus der Sicherung kopiert."
+        else
+            echo "<WARNING> php fehlt - ob $f oder die Sicherung brauchbar ist, liess"
+            echo "<WARNING> sich nicht pruefen. Nichts eingespielt; die Sicherung liegt unter $BK."
         fi
+        continue
+    fi
+    ak_inhalt "$BK" "$ART"
+    if [ "$?" != 0 ]; then
+        echo "<WARNING> Die Sicherung $BK traegt selbst keinen Inhalt"
+        echo "<WARNING> (kein gueltiges JSON mit $( [ "$ART" = zugang ] && echo Passwort || echo Aktionstoken ))."
+        echo "<WARNING> $f wurde deshalb NICHT daraus zurueckgespielt."
+        continue
+    fi
+    if [ "$CF_RC" = 3 ] && [ ! -e "$CF.kaputt" ]; then
+        ( umask 077 && cp "$CF" "$CF.kaputt" ) 2>/dev/null && chmod 600 "$CF.kaputt" 2>/dev/null
+    fi
+    NEU="$CF.neu.$$"
+    if cp -p "$BK" "$NEU" 2>/dev/null && mv -f "$NEU" "$CF" 2>/dev/null && cmp -s "$BK" "$CF"; then
+        echo "<OK> $f aus Sicherung wiederhergestellt."
+    else
+        rm -f "$NEU" 2>/dev/null
+        echo "<WARNING> $f liess sich NICHT aus der Sicherung zurueckspielen."
+        echo "<WARNING> Die Sicherung liegt unveraendert unter $BK."
     fi
 done
 chmod 600 "$PCONFIG/zugang.json"

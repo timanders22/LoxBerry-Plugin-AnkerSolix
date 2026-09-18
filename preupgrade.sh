@@ -127,22 +127,42 @@ ak_dienste_beenden() {
 # Der Merker liegt NEBEN dem Konfigordner: alles darin und im Datenordner
 # ist nach purge_installation weg.
 LIEF="$BASE/config/plugins/$PFOLDER.backup.lief"
+# Warnungen werden gezaehlt: die Schlusszeile darf nicht besser aussehen als
+# ihr schlechtester Schritt (CLAUDE.md 6).
+AK_WARN=0
 rm -f "$LIEF"
 if [ -f "$BASE/data/plugins/$PFOLDER/soll_laufen" ]; then
-    : > "$LIEF" || true
-    echo "<INFO> Der Dienst lief - er wird nach dem Upgrade wieder gestartet."
+    # Zugesagt wird der Neustart nur, wenn der Merker wirklich liegt. Bis 0.9.18
+    # stand hier  : > "$LIEF" || true  und die Zusage danach unbedingt; in
+    # einem nicht beschreibbaren config/plugins/ entstand kein Merker, und die
+    # Zeile versprach trotzdem den Neustart (Pruefung-AnkerSolix-0.9.19, U3b).
+    if : 2>/dev/null > "$LIEF" && [ -f "$LIEF" ]; then
+        echo "<INFO> Der Dienst lief - er wird nach dem Upgrade wieder gestartet."
+    else
+        AK_WARN=1
+        echo "<WARNING> Der Dienst lief, aber der Merker $LIEF liess sich nicht"
+        echo "<WARNING> anlegen. Nach dem Upgrade bitte im Reiter Einstellungen von Hand starten."
+    fi
 fi
 
-# Die Meldung haengt am Merker, nicht am blossen Aufruf: `anhalten()` gibt
-# auch ohne laufenden Dienst 0 zurueck („laeuft nicht"), und mit `|| true`
-# stand die Zeile ohnehin unbedingt da. Gemessen 11.09.2026 ueber den
-# Bestand; derselbe Fehler steckte in vier Linien.
+# Die Meldung haengt an der AUSGABE von "dienst.sh stop", nicht am Merker.
+# Bis 0.9.18 entschied der Merker: ein Dienst, der ohne Sollmerker lief, wurde
+# angehalten und als "lief nicht" gemeldet (Pruefung-AnkerSolix-0.9.19, U1),
+# und ein gescheitertes Anhalten ("FEHLER: Dienst laeuft weiter", Rueckgabewert
+# 1 aus anhalten()) als "angehalten" (U2). anhalten() sagt "angehalten" erst,
+# nachdem es nachgesehen hat, und "laeuft nicht", wenn es nichts fand.
 if [ -x "$DIENST" ]; then
-    "$DIENST" stop >/dev/null 2>&1 || true
-    if [ -f "$LIEF" ]; then
+    STOP_AUS=$("$DIENST" stop 2>&1)
+    STOP_RC=$?
+    STOP_LETZTE=$(printf '%s\n' "$STOP_AUS" | tail -n 1)
+    if [ "$STOP_RC" = 0 ] && [ "$STOP_LETZTE" = "angehalten" ]; then
         echo "<INFO> Laufender Dienst angehalten."
-    else
+    elif [ "$STOP_RC" = 0 ] && [ "$STOP_LETZTE" = "laeuft nicht" ]; then
         echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
+    else
+        AK_WARN=1
+        echo "<WARNING> Der Dienst liess sich nicht anhalten (Rueckgabewert $STOP_RC):"
+        printf '%s\n' "$STOP_AUS" | head -n 3 | sed 's/^/<WARNING>   /'
     fi
 else
     # Rueckfall, falls das Dienstskript fehlt: dieselbe Sorgfalt von Hand.
@@ -185,12 +205,99 @@ else
     fi
 fi
 
+# ---------- INHALT statt Anfuehrungszeichen ----------
+#
+# Wortgleich in postinstall.sh - ein Hakenskript kann sich nichts aus dem
+# Plugin-Ordner holen. "Inhalt" heisst: ein lesbares JSON-Objekt MIT dem
+# Geheimnis der Datei - in ankersolix.json das Aktionstoken (ohne es erreicht
+# der Miniserver den Endpunkt nicht mehr), in zugang.json das Passwort des
+# Anker-Kontos (die Oberflaeche kann es nicht loeschen, nur ersetzen: ein
+# leeres Passwortfeld laesst das gespeicherte stehen, ak_zugang_speichern()).
+#
+# Rueckgabe: 0 = traegt Inhalt, 1 = fehlt, leer oder "{}",
+#            3 = da, aber ohne Inhalt (kein gueltiges JSON-Objekt oder ohne
+#                das Geheimnis), 2 = NICHT PRUEFBAR (kein php).
+ak_inhalt() {   # $1 Datei, $2 Art: konf | zugang
+    [ -f "$1" ] || return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $roh = @file_get_contents($argv[1]);
+        if ($roh === false) { exit(3); }
+        $t = trim($roh);
+        if ($t === "" || $t === "{}") { exit(1); }
+        $d = json_decode($t, true);
+        if (!is_array($d) || count($d) === 0) { exit(3); }
+        if ($argv[2] === "zugang") {
+            $ok = isset($d["passwort"]) && is_string($d["passwort"]) && $d["passwort"] !== "";
+        } else {
+            $ok = isset($d["aktionstoken"]) && is_string($d["aktionstoken"])
+                  && trim($d["aktionstoken"]) !== "";
+        }
+        exit($ok ? 0 : 3);
+    ' -- "$1" "$2" 2>/dev/null
+    ak_ir=$?
+    case "$ak_ir" in 0|1|3) return "$ak_ir" ;; esac
+    return 2
+}
+
+# ---------- Sichern: nur Inhalt, und nie ueber die Sicherung hinweg ----------
+#
+# Bis 0.9.18 stand hier  cp -p "$CFGDIR/$f" "<ordner>.backup.$f"  ohne jede
+# Pruefung, direkt auf die Sicherung. Zwei Folgen, beide in WSL gemessen
+# (Pruefung-AnkerSolix-0.9.19):
+#   - Faelle S1-S3: eine abgeschnittene Datei oder ein {"email":"",
+#     "passwort":""} verdraengte die heile Sicherung - das Kontopasswort bzw.
+#     das Aktionstoken stand danach nirgends mehr.
+#   - Fall S6: cp kappt das Ziel, BEVOR es schreibt. Scheiterte das Schreiben
+#     (volle Karte, nachgestellt mit ulimit -f), war die alte Sicherung weg
+#     und die neue unvollstaendig.
+# Jetzt: pruefen, in eine Nebendatei kopieren, nachlesen, umbenennen. Ein
+# Stand ohne Inhalt ueberschreibt die Sicherung nie.
 CFGDIR="$BASE/config/plugins/$PFOLDER"
 for f in ankersolix.json zugang.json; do
-    if [ -f "$CFGDIR/$f" ]; then
-        cp -p "$CFGDIR/$f" "$BASE/config/plugins/$PFOLDER.backup.$f" || true
+    CF="$CFGDIR/$f"
+    BK="$BASE/config/plugins/$PFOLDER.backup.$f"
+    [ -e "$CF" ] || continue
+    case "$f" in zugang.json) ART=zugang ;; *) ART=konf ;; esac
+    ak_inhalt "$CF" "$ART"; CF_RC=$?
+    if [ "$CF_RC" = 1 ]; then
+        # Nie eingerichtet (postinstall.sh legt "{}" an) - nichts zu sichern.
+        [ -e "$BK" ] && echo "<INFO> $f ist leer - die vorhandene Sicherung bleibt unveraendert."
+        continue
+    fi
+    if [ "$CF_RC" = 3 ]; then
+        AK_WARN=1
+        echo "<WARNING> $f ist unlesbar oder traegt kein $( [ "$ART" = zugang ] && echo Passwort || echo Aktionstoken )."
+        if [ -e "$BK" ]; then
+            echo "<WARNING> Die vorhandene Sicherung bleibt unveraendert: $BK"
+        else
+            echo "<WARNING> Es gibt keine Sicherung; $f wird NICHT gesichert."
+        fi
+        continue
+    fi
+    if [ "$CF_RC" = 2 ] && [ -e "$BK" ]; then
+        AK_WARN=1
+        echo "<WARNING> $f liess sich nicht pruefen (fehlt php?). Die vorhandene"
+        echo "<WARNING> Sicherung bleibt unveraendert: $BK"
+        continue
+    fi
+    # Die Nebendatei liegt neben der Sicherung (dasselbe Dateisystem, also ist
+    # mv ein Umbenennen). zugang.json traegt das Passwort im Klartext: 0600,
+    # bevor die Datei ihren Namen bekommt.
+    NEU="$BK.neu.$$"
+    if cp -p "$CF" "$NEU" 2>/dev/null \
+       && { [ "$ART" != zugang ] || chmod 600 "$NEU" 2>/dev/null; } \
+       && cmp -s "$CF" "$NEU" && mv -f "$NEU" "$BK" 2>/dev/null; then
+        echo "<INFO> $f gesichert."
+    else
+        rm -f "$NEU" 2>/dev/null
+        AK_WARN=1
+        echo "<WARNING> $f liess sich NICHT sichern; eine vorhandene Sicherung bleibt unveraendert."
     fi
 done
-chmod 600 "$BASE/config/plugins/$PFOLDER.backup.zugang.json" 2>/dev/null || true
-echo "<OK> preupgrade abgeschlossen."
+if [ "$AK_WARN" = 0 ]; then
+    echo "<OK> preupgrade abgeschlossen."
+else
+    echo "<WARNING> preupgrade mit Warnungen abgeschlossen - siehe die Zeilen oben."
+fi
 exit 0
