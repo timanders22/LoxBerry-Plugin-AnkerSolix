@@ -342,7 +342,9 @@ chmod 600 "$PCONFIG/zugang.json"
 # zweiten an. Gemessen am 18.09.2026, Fall G7a: 200 Waechterlaeufe waehrend
 # der Installation, danach genau ein Dienst.
 LIEF="$BASE/config/plugins/$PFOLDER.backup.lief"
+DIENST_LIEF=0
 if [ -f "$LIEF" ]; then
+    DIENST_LIEF=1
     if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" start --trotz-marke >/dev/null 2>&1; then
         echo "<OK> Der Dienst wurde wieder gestartet."
     else
@@ -352,7 +354,28 @@ if [ -f "$LIEF" ]; then
     rm -f "$LIEF"
 fi
 
-echo "<OK> Installation abgeschlossen."
-echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, Anker-Zugangsdaten eintragen"
-echo "<INFO> und den Dienst im Reiter Einstellungen starten."
+# ---------- Schlusszeile ----------
+# Dieses Skript laeuft bei der Erstinstallation UND bei jedem Upgrade
+# (plugininstall.pl uebergibt kein Kennzeichen). Bis 0.9.19 stand hier nach
+# jedem Upgrade "Anker-Zugangsdaten eintragen", obwohl sie oben
+# zurueckgespielt worden waren - wer das liest, haelt sie fuer verloren, und
+# der Fall, in dem sie es wirklich sind, sieht genauso aus.
+# Entschieden wird nach dem INHALT von zugang.json nach dem Zurueckspielen,
+# mit derselben Pruefung wie die Sicherung (ak_inhalt: Passwort vorhanden),
+# nicht nach der Upgrade-Marke - die sagt "Upgrade", nicht "Zugangsdaten
+# sind da". Ist die Rueckholung gescheitert, erscheint die Anleitung. Ohne php
+# (Rueckgabe 2) ist das nicht pruefbar; dann steht sie ebenfalls.
+# Gemessen am 24.09.2026: Pruefung-AnkerSolix-0.9.20/postinstall_hinweis.md.
+ak_inhalt "$PCONFIG/zugang.json" zugang
+if [ "$?" = 0 ]; then
+    echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen (Anker-Zugangsdaten vorhanden)."
+    if [ "$DIENST_LIEF" = 0 ]; then
+        echo "<INFO> Der Dienst lief vor dem Upgrade nicht und wurde nicht gestartet"
+        echo "<INFO> (Reiter Einstellungen)."
+    fi
+else
+    echo "<OK> Installation abgeschlossen."
+    echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, Anker-Zugangsdaten eintragen"
+    echo "<INFO> und den Dienst im Reiter Einstellungen starten."
+fi
 exit 0

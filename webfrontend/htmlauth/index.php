@@ -567,9 +567,18 @@ if ($ak_rahmen) {
     <b><?= count($ak_anlagen) ?></b>
     <span class="sm-hilfe"><?= count($ak_geraete) ?> <?= ak_e(ak_t('ALLG.GERAETE')) ?></span>
   </div>
+  <!-- Der grosse Wert ist die MQTT-Veroeffentlichung DIESES Plugins (mqtt_ein),
+       der Autostart des Gateways steht klein darunter. Bis 0.9.19 stand hier
+       der Autostart des Gateways; "MQTT ein" las sich, als sende das Plugin,
+       auch wenn es gar nicht veroeffentlichte.
+       Vorbild ZendureSolarFlow 0.9.21 und BatterieBMS 0.9.22. Ohne
+       MQTT-Abschnitt in general.json heisst der Autostart "nicht feststellbar"
+       statt "aus". -->
   <div class="sm-kachel">MQTT
-    <b class="<?= $ak_mqtt['autostart'] ? 'sm-an' : 'sm-aus' ?>"><?= $ak_mqtt['autostart'] ? ak_e(ak_t('ALLG.EIN')) : ak_e(ak_t('ALLG.AUS')) ?></b>
-    <span class="sm-hilfe"><?= ak_e(ak_t('ALLG.GATEWAY')) ?></span>
+    <b class="<?= !empty($ak_cfg['mqtt_ein']) ? 'sm-an' : 'sm-aus' ?>"><?= !empty($ak_cfg['mqtt_ein']) ? ak_e(ak_t('ALLG.EIN')) : ak_e(ak_t('ALLG.AUS')) ?></b>
+    <span class="sm-hilfe"><?= ak_e(sprintf(ak_t('ALLG.KACHEL_MQTT_HILFE'),
+        !$ak_mqtt['gefunden'] ? ak_t('ALLG.NICHT_FESTSTELLBAR')
+        : ($ak_mqtt['autostart'] ? ak_t('ALLG.EIN') : ak_t('ALLG.AUS')))) ?></span>
   </div>
   <div class="sm-kachel"><?= ak_e(ak_t('ALLG.STEUERUNG')) ?>
     <b class="<?= !empty($ak_cfg['steuerung_ein']) ? 'sm-an' : 'sm-aus' ?>"><?= !empty($ak_cfg['steuerung_ein']) ? ak_e(ak_t('ALLG.EIN')) : ak_e(ak_t('ALLG.AUS')) ?></b>

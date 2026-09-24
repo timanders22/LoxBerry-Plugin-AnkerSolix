@@ -16,6 +16,21 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.20 — die Kachel „MQTT" zeigt das Plugin
+
+- **Die Kachel „MQTT" zeigt jetzt, ob dieses Plugin veröffentlicht.** Bis 0.9.19
+  stand dort als großer Wert der Autostart des MQTT-Gateways von LoxBerry, und
+  „MQTT ein" las sich, als sende das Plugin — auch wenn es im Reiter MQTT
+  ausgeschaltet war. Der Autostart des Gateways steht jetzt klein darunter;
+  fehlt der MQTT-Abschnitt in der LoxBerry-Konfiguration, heißt er dort
+  „nicht feststellbar" statt „aus".
+- **Nach einem Upgrade verlangt das Installationsprotokoll die Zugangsdaten
+  nicht mehr neu.** Bis 0.9.19 endete es jedes Mal mit „Anker-Zugangsdaten
+  eintragen", auch wenn sie gerade zurückgespielt worden waren; jetzt steht die
+  Anleitung nur noch, wenn `zugang.json` danach kein Passwort trägt
+  (Erstinstallation oder gescheiterte Rückholung), sonst „Aktualisierung
+  abgeschlossen, Einstellungen übernommen".
+
 ## Version 0.9.19 — die Sicherung wird nach Inhalt beurteilt, und das Plugin schreibt nur aus der Installation
 
 Gemessen am 18.09.2026 in einem Wegwerfbaum unter Linux (81 Fälle, Prüfstand
