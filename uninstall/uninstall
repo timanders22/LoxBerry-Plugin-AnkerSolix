@@ -52,7 +52,7 @@ SKRIPT="$PBIN/ankersolix.py"
 # fremder Prozess "python3 -c … <dienstpfad>", dessen Nummer in der PID-Datei
 # stand, war nach der Deinstallation tot.
 #
-# Das dritte Argument schliesst den Einmallauf --freigeben aus Abschnitt 1 aus:
+# Das dritte Argument schliesst den Einmallauf --freigeben aus Abschnitt 2 aus:
 # er laeuft mit demselben Interpreter und demselben Skript, ist aber nicht der
 # Dauerlaeufer.
 AK_SKRIPT="$SKRIPT"
@@ -100,22 +100,7 @@ ak_dienste_beenden() {
     echo $ak_ziel
 }
 
-# ---------- 1. Anlage freigeben ----------
-# Nur versuchen, wenn die Steuerung freigegeben war. War sie es nie, hat
-# dieses Plugin auch nie einen Sollwert gesetzt, und ein Schreibbefehl beim
-# Deinstallieren waere ein Eingriff ohne Anlass.
-if [ -x "$PY" ] && [ -f "$SKRIPT" ] && [ -f "$PCONFIG/ankersolix.json" ] \
-   && grep -q '"steuerung_ein"[[:space:]]*:[[:space:]]*1' "$PCONFIG/ankersolix.json" 2>/dev/null; then
-    if "$PY" "$SKRIPT" --freigeben >/dev/null 2>&1; then
-        echo "<OK> Die Anlage wurde auf Eigenverbrauch zurueckgestellt."
-    else
-        echo "<INFO> Die Rueckstellung auf Eigenverbrauch ist nicht gelungen."
-        echo "<INFO> Bitte die Betriebsart in der Anker-App selbst pruefen -"
-        echo "<INFO> ein gestellter Hauslast-Sollwert bleibt sonst stehen."
-    fi
-fi
-
-# ---------- 2. Dienst anhalten ----------
+# ---------- 1. Dienst anhalten ----------
 if [ -x "$DIENST" ]; then
     "$DIENST" stop >/dev/null 2>&1 || true
 fi
@@ -150,13 +135,49 @@ if [ -n "$WAISEN" ]; then
     echo "<INFO> Ein Dienst ohne PID-Datei lief und wurde beendet (PID $WAISEN)."
 fi
 
+# ---------- 2. Anlage freigeben ----------
+# Erst NACH dem Anhalten (Befund Installer 3): bis 0.9.21 lief die
+# Rueckstellung vor Block 1, ohne eigene Schranke - hing sie, kam keine
+# Zeile, der Dienst lief weiter und die Sicherungen mit dem Klartextpasswort
+# blieben liegen; und ein in diesem Augenblick abgearbeiteter Befehl des
+# laufenden Dienstes konnte einen Sollwert NACH der Rueckstellung setzen.
+#
+# Nur versuchen, wenn die Steuerung freigegeben war. War sie es nie, hat
+# dieses Plugin auch nie einen Sollwert gesetzt, und ein Schreibbefehl beim
+# Deinstallieren waere ein Eingriff ohne Anlass. "Freigegeben" heisst 1 ODER
+# true (Befund Installer 4): Dienst und Endpunkt werten beides als ein.
+if [ -x "$PY" ] && [ -f "$SKRIPT" ] && [ -f "$PCONFIG/ankersolix.json" ] \
+   && grep -Eq '"steuerung_ein"[[:space:]]*:[[:space:]]*(1|true)([^0-9A-Za-z_.]|$)' "$PCONFIG/ankersolix.json" 2>/dev/null; then
+    # 120 s Schranke; -k 10: wer SIGTERM ueberhoert, wird danach beendet.
+    if command -v timeout >/dev/null 2>&1; then
+        timeout -k 10 120 "$PY" "$SKRIPT" --freigeben >/dev/null 2>&1
+    else
+        "$PY" "$SKRIPT" --freigeben >/dev/null 2>&1
+    fi
+    FREI_RC=$?
+    if [ "$FREI_RC" = 0 ]; then
+        echo "<OK> Die Anlage wurde auf Eigenverbrauch zurueckgestellt."
+    elif [ "$FREI_RC" = 124 ] || [ "$FREI_RC" = 137 ]; then
+        echo "<WARNING> Die Rueckstellung auf Eigenverbrauch wurde nach 120 s abgebrochen (Zeitueberschreitung)."
+        echo "<WARNING> Bitte die Betriebsart in der Anker-App selbst pruefen -"
+        echo "<WARNING> ein gestellter Hauslast-Sollwert bleibt sonst stehen."
+    else
+        echo "<INFO> Die Rueckstellung auf Eigenverbrauch ist nicht gelungen."
+        echo "<INFO> Bitte die Betriebsart in der Anker-App selbst pruefen -"
+        echo "<INFO> ein gestellter Hauslast-Sollwert bleibt sonst stehen."
+    fi
+fi
+
 # ---------- 3. Sicherungen und Daten abraeumen ----------
 ANZAHL=0
+# Dazu die .alt, die postinstall.sh bei einer Neuinstallation beiseitelegt
+# (Befund Installer 1) - auch sie tragen das Klartextpasswort.
 for f in ankersolix.json zugang.json; do
-    BK="$BASE/config/plugins/$PFOLDER.backup.$f"
-    if [ -f "$BK" ]; then
-        rm -f "$BK" && ANZAHL=$((ANZAHL + 1))
-    fi
+    for BK in "$BASE/config/plugins/$PFOLDER.backup.$f" "$BASE/config/plugins/$PFOLDER.backup.$f.alt"; do
+        if [ -f "$BK" ]; then
+            rm -f "$BK" && ANZAHL=$((ANZAHL + 1))
+        fi
+    done
 done
 rm -rf "$BASE/data/plugins/$PFOLDER"
 
@@ -171,6 +192,8 @@ rm -rf "$BASE/data/plugins/$PFOLDER"
 #                    meldet dann "lief vor dem Upgrade, liess sich aber nicht
 #                    starten", und niemand versteht, wovon die Rede ist.
 rm -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+# Der Einbaumerker aus postinstall.sh (Befund Installer 2).
+rm -f "$BASE/data/plugins/$PFOLDER.postinstall_lauf"
 rm -f "$BASE/config/plugins/$PFOLDER.backup.lief"
 
 echo "<OK> Anker SOLIX entfernt, $ANZAHL Sicherungsdatei(en) geloescht."

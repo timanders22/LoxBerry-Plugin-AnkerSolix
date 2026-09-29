@@ -242,6 +242,18 @@ marke_gilt() {
 }
 
 starten() {
+    # Startsperre (Befund Code 7): zwei gleichzeitige Starts (Knopf und
+    # Minutenwaechter) ergaben bis 0.9.21 zwei Dienste - beide sahen "laeuft
+    # nicht", beide starteten. Gesperrt wird auf diesem Skript selbst; der
+    # Dienst bekommt den Griff NICHT vererbt (8<&- an der nohup-Zeile), sonst
+    # hielte er die Sperre, solange er laeuft. Bauform Einspeisebremse 0.9.28.
+    if command -v flock >/dev/null 2>&1; then
+        exec 8<"$0"
+        if ! flock -w 15 8; then
+            echo "FEHLER: Ein anderer Start laeuft noch - abgebrochen."
+            return 1
+        fi
+    fi
     if [ "$AK_TROTZ_MARKE" != "1" ] && marke_gilt; then
         # Ende mit 0: eine laufende Aktualisierung ist kein Fehler. Der
         # Waechter soll deshalb auch keine Fehlerzeile schreiben.
@@ -259,26 +271,46 @@ starten() {
         echo "laeuft bereits (PID $ERSTE)"
         return 0
     fi
+    # Fehlende Voraussetzungen nehmen den Sollmerker zurueck (Befund Code 6,
+    # Regeln/03): sonst versucht der Waechter jede Minute neu, ohne dass es je
+    # gelingen kann.
     if [ ! -x "$PY" ]; then
         echo "FEHLER: virtuelle Python-Umgebung fehlt ($PY). Plugin neu installieren."
+        rm -f "$SOLL"
         return 1
     fi
     if [ ! -f "$PCONFIG/zugang.json" ]; then
         echo "FEHLER: Zugangsdaten fehlen ($PCONFIG/zugang.json). Erst in der Oberflaeche eintragen."
+        rm -f "$SOLL"
+        return 1
+    fi
+    # Den INHALT pruefen, nicht nur die Datei: postinstall.sh legt "{}" an.
+    # Gelesen wird mit dem Python des Dienstes; kein Wert wird ausgegeben.
+    if ! "$PY" -c 'import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        z = json.load(f)
+except Exception:
+    sys.exit(2)
+ok = isinstance(z, dict) and str(z.get("email") or "").strip() != "" and str(z.get("passwort") or "") != ""
+sys.exit(0 if ok else 1)' "$PCONFIG/zugang.json" >/dev/null 2>&1; then
+        echo "FEHLER: Zugangsdaten unvollstaendig - E-Mail oder Passwort leer ($PCONFIG/zugang.json). Erst in der Oberflaeche eintragen."
+        rm -f "$SOLL"
         return 1
     fi
     mkdir -p "$PDATA" "$PLOG" 2>/dev/null
-    touch "$SOLL"
     # Ausgabe geht in die Startdatei, NICHT in das Protokoll: dort schreibt
     # ausschliesslich der RotatingFileHandler des Python-Skripts. Das Skript
     # protokolliert deshalb auch nicht zusaetzlich nach stdout.
     # Beim Start gekappt: diese Datei sammelt nur die Ausgabe EINES Laufes.
     # Ohne Kappung waere sie der einzige Weg im Plugin, der unbegrenzt waechst.
     : > "$STARTLOG"
-    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
+    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 8<&- &
     echo $! > "$PID"
     sleep 1
     if laeuft; then
+        # Der Sollmerker erst nach dem gelungenen Start (Befund Code 6).
+        touch "$SOLL"
         echo "gestartet (PID $(cat "$PID"))"
         return 0
     fi
@@ -289,6 +321,11 @@ starten() {
         echo "--- $STARTLOG ---"
         head -n 12 "$STARTLOG"
     fi
+    # Der Sollmerker bleibt hier stehen: ist der Prozess nur gleich wieder
+    # geendet (etwa beim Hochfahren ohne Netz), soll der Waechter es in der
+    # naechsten Minute erneut versuchen. Ein Start per Knopf hat ihn ohnehin
+    # erst nach dem Erfolg gesetzt; nur fehlende Voraussetzungen nehmen ihn
+    # oben zurueck.
     rm -f "$PID"
     return 1
 }

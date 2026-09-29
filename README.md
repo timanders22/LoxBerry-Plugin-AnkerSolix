@@ -16,6 +16,47 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.21 — volle Karte, Sicherung, Zähler und ein Neustart jede Minute
+
+Durchsicht vom 29.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT); jeder Punkt ist gemessen
+und hat eine Gegenprobe, die an 0.9.20 rot und an 0.9.21 grün ist.
+
+- **Bei voller Speicherkarte gingen alle Einstellungen verloren.** Ein abgeschnitten geschriebener Stand
+  galt als Erfolg; danach waren Konfiguration und Zweitschrift unlesbar, das Aktionstoken neu gewürfelt
+  (jede Adresse im Miniserver antwortete 403) und das Anker-Passwort leer. Jetzt gilt nur, was ganz
+  geschrieben ist und sich so zurücklesen lässt; die Zweitschrift wird erst danach erneuert.
+- **Konfiguration und Zweitschrift sind nur noch für das Plugin lesbar (0600).** Beide trugen das
+  Aktionstoken und standen mit 0644 da; das Update berichtigt bestehende Anlagen.
+- **Das Zurückspielen einer Sicherung prüft jeden Wert** wie das Formular: Typ, Grenzen, Themen-Präfix,
+  Aktionstoken. Bisher wurde ein Token als Liste zu `Array` und ein leeres Token still neu gewürfelt. Die
+  Sicherung trägt jetzt auch die Anker-Zugangsdaten (wie der Hinweis am Knopf immer schon sagte) und einen
+  lesbaren Kopf.
+- **Zähler fallen nicht mehr.** Die Energiezähler waren die Summe des Aufbewahrungsfensters und fielen,
+  wenn ein Tag herausfiel, ein Tageswert berichtigt oder das Fenster verkleinert wurde — ein Zähler-Baustein
+  in Loxone rechnete daraus negative Energie. Jetzt wird nur das Plus fortgeschrieben; bestehende Zähler
+  springen nicht.
+- **`ALTER` vor dem ersten gelungenen Abruf ist -1**, nicht die Uhrzeit in Sekunden seit 1970, und `OK` ist
+  dann 0.
+- **Kein Neustart jede Minute ohne Zugangsdaten.** „Dienst starten" vor dem Eintragen der Zugangsdaten
+  setzte den Sollmerker, und der Wächter versuchte es jede Minute. Außerdem verhindert eine Startsperre, dass
+  Knopf und Wächter gleichzeitig zwei Dienste starten.
+- **MQTT:** `anlageN/prognose` wurde nie gesendet (falscher Schlüssel), jetzt schon. Mit „nur Änderungen
+  senden" geht alle 30 Minuten der volle Satz hinaus. Ein leerer Text geht als `-` hinaus, nicht leer. Ein
+  ungültiges Themen-Präfix wird abgewiesen, statt still gesäubert oder durch `ankersolix` ersetzt zu werden.
+- **Die Oberfläche leitet nach jedem Absenden um.** F5 schickte bisher den letzten Knopf noch einmal, etwa
+  einen zweiten Schaltbefehl an die Solarbank. Die Meldung reist als Einmalmeldung und erscheint genau
+  einmal. Die Zugangsdaten werden nur noch gespeichert, wenn auch alle übrigen Felder gültig sind.
+- **Installation und Deinstallation:** eine Neuinstallation spielt keine Zweitschriften einer früheren
+  Installation mehr ein (sie werden beiseitegelegt und genannt); das Upgrade meldet den Dienst genau einmal;
+  die Deinstallation hält den Dienst an, bevor sie auf Eigenverbrauch zurückstellt, bricht eine hängende
+  Rückstellung nach 120 s mit Meldung ab und erkennt `steuerung_ein` auch als `true`.
+- **Die Loxone-Vorlage** trägt Einheit, Grenzen und den Kopf, den Loxone Config selbst schreibt; die Titel
+  der Eingänge sind unverändert.
+- PHP 8.5 meldet keine Verfallswarnungen mehr.
+
+**Für bestehende Anlagen:** Wer die Eingangsvorlage neu importiert, bekommt neue Bausteine neben den alten
+(Loxone Config überschreibt nichts); die Titel sind gleich geblieben, nur Einheit und Anzeigename sind neu.
+
 ## Version 0.9.20 — die Kachel „MQTT" zeigt das Plugin
 
 - **Die Kachel „MQTT" zeigt jetzt, ob dieses Plugin veröffentlicht.** Bis 0.9.19

@@ -116,6 +116,8 @@ $ak_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
 $ak_testausgabe = '';
 $ak_trockenlauf = array();
 $ak_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
+// Jeder POST endet mit 303, auch einer mit ungueltigem Formmerkmal (B11).
+$ak_post_roh = $ak_post;
 
 /* ---------------- Merkmal gegen fremde Absender ----------------
  *
@@ -138,6 +140,19 @@ $ak_formtoken = ak_formtoken($ak_cfg);
 if ($ak_post && !ak_formtoken_gueltig($ak_cfg, isset($_POST['formtoken']) ? (string) $_POST['formtoken'] : '')) {
     $ak_fehler[] = ak_t('ALLG.FORMTOKEN');
     $ak_post = false;
+}
+
+/* Die Einmalmeldung der vorigen Anfrage - NUR beim GET (B11, Befund
+ * Oberflaeche 1/2). Beim POST ist $ak_fehler der Sammler der
+ * Eingabepruefung; eine alte Beanstandung verhinderte dort das Speichern. */
+if (!$ak_post_roh) {
+    $ak_einmal = ak_einmal_lesen();
+    if ($ak_einmal) {
+        $ak_meldungen = $ak_einmal['meldungen'];
+        $ak_fehler = array_merge($ak_fehler, $ak_einmal['fehler']);
+        $ak_testausgabe = $ak_einmal['test'];
+        $ak_trockenlauf = $ak_einmal['trocken'];
+    }
 }
 
 /* ==================================================================
@@ -195,24 +210,9 @@ if ($ak_post && isset($_POST['speichern'])) {
         $ak_cfg['land'] = $ak_land;
     }
 
-    foreach (array(
-        'intervall'      => array(30, 900),
-        'takt_details'   => array(1, 240),
-        'takt_energie'   => array(1, 240),
-        'takt_prognose'  => array(1, 1440),
-        'endpunkt_limit' => array(1, 60),
-        'anfrage_pause'  => array(0, 100),
-        'anfrage_frist'  => array(5, 60),
-        'hauslast_min'   => array(0, 5000),
-        'hauslast_max'   => array(0, 5000),
-        'verlauf_tage'   => array(1, 90),
-        'energie_tage'   => array(1, 3650),
-        'schreibbremse'  => array(0, 3600),
-        'schrittweite'   => array(0, 1000),
-        'rueckfall_min'  => array(0, 1440),
-        'melden_alter'   => array(60, 86400),
-        'wartezeit'      => array(0, 20),
-    ) as $ak_feld => $ak_grenzen) {
+    // Die Grenzen stehen EINMAL in ak_zahlgrenzen(); das Zurueckspielen
+    // prueft gegen dieselbe Tabelle (B9).
+    foreach (ak_zahlgrenzen() as $ak_feld => $ak_grenzen) {
         $ak_wert = isset($_POST[$ak_feld]) ? trim((string) $_POST[$ak_feld]) : '';
         if (!preg_match('/^[0-9]+$/', $ak_wert)) {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_ZAHL'), ak_t('EINST.L_' . strtoupper($ak_feld)));
@@ -279,18 +279,22 @@ if ($ak_post && isset($_POST['speichern'])) {
     $ak_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
     if ($ak_email !== '' && !filter_var($ak_email, FILTER_VALIDATE_EMAIL)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_EMAIL');
-    } else {
-        if (!ak_zugang_speichern($ak_email, $ak_pw)) {
-            $ak_fehler[] = ak_t('EINST.FEHLER_ZUGANG_SPEICHERN');
-        }
     }
+    // Geprueft wird, was NACH dem Speichern stuende - geschrieben wird erst
+    // unten: ein leeres Passwortfeld laesst das gespeicherte stehen.
     $ak_zg = ak_zugang();
-    if ($ak_zg['laenge'] > 0 && $ak_zg['email'] === '') {
+    $ak_pw_laenge = $ak_pw !== '' ? strlen($ak_pw) : (int) $ak_zg['laenge'];
+    if ($ak_pw_laenge > 0 && $ak_email === '') {
         $ak_fehler[] = ak_t('EINST.WARN_PW_OHNE_KONTO');
     }
 
+    /* Reihenfolge (Befund Oberflaeche 6): alles pruefen, dann Zugang, dann
+     * Konfiguration. Bis 0.9.21 wurde zugang.json schon geschrieben, wenn
+     * danach eine andere Beanstandung das Speichern verhinderte. */
     if (!$ak_fehler) {
-        if (ak_config_speichern($ak_cfg)) {
+        if (!ak_zugang_speichern($ak_email, $ak_pw)) {
+            $ak_fehler[] = ak_t('EINST.FEHLER_ZUGANG_SPEICHERN');
+        } elseif (ak_config_speichern($ak_cfg)) {
             $ak_meldungen[] = ak_t('EINST.GESPEICHERT');
         } else {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_SPEICHERN'), $ak_p['config']);
@@ -310,12 +314,14 @@ if ($ak_post && isset($_POST['save_mqtt'])) {
     $ak_cfg = ak_config(true);
     $ak_cfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     $ak_cfg['mqtt_nur_aenderung'] = isset($_POST['mqtt_nur_aenderung']) ? 1 : 0;
-    $ak_topic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-        (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
-    if ($ak_topic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $ak_topic)) {
+    // Ungueltig wird abgewiesen, nicht still gesaeubert (Befund MQTT M6);
+    // dieselbe Pruefung gilt beim Zurueckspielen und im Dienst.
+    $ak_topic = isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic'])
+        ? trim($_POST['mqtt_topic']) : '';
+    if (!ak_topic_gueltig($ak_topic)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_TOPIC');
     } else {
-        $ak_cfg['mqtt_topic'] = trim($ak_topic, '/');
+        $ak_cfg['mqtt_topic'] = $ak_topic;
     }
     if (!$ak_fehler) {
         if (ak_config_speichern($ak_cfg)) {
@@ -414,8 +420,8 @@ $ak_rahmen = class_exists('LBWeb', false);
  * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
  * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
 if ($ak_post && isset($_POST['ak_sichern'])) {
-    $ak_js = json_encode(ak_config(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    // Mit lesbarem _-Kopf und den Zugangsdaten aus zugang.json (B9).
+    $ak_js = ak_sicherung_bauen();
     if ($ak_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="ankersolix_einstellungen_'
@@ -439,13 +445,19 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
     } elseif ((int) $_FILES['ak_sicherung']['size'] > 262144) {
         $ak_fehler[] = ak_t('EINST.SICH_ZU_GROSS');
     } else {
-        list($ak_neu, $ak_mangel, $ak_n) = ak_sicherung_lesen(
+        list($ak_neu, $ak_mangel, $ak_n, $ak_zneu) = ak_sicherung_lesen(
             (string) @file_get_contents($_FILES['ak_sicherung']['tmp_name']));
         if ($ak_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
              * nichts. */
             $ak_fehler[] = ak_t('EINST.SICH_ABGELEHNT') . ' '
                             . implode(' ', $ak_mangel);
+        } elseif ($ak_zneu !== null && !ak_zugang_speichern(
+                array_key_exists('email', $ak_zneu) ? $ak_zneu['email'] : null,
+                array_key_exists('passwort', $ak_zneu) ? $ak_zneu['passwort'] : null)) {
+            // Erst der Zugang, dann die Konfiguration: scheitert der Zugang,
+            // bleibt auch die Konfiguration unveraendert.
+            $ak_fehler[] = ak_t('EINST.FEHLER_ZUGANG_SPEICHERN');
         } elseif (ak_config_speichern($ak_neu)) {
             $ak_meldungen[] = sprintf(ak_t('EINST.SICH_UEBERNOMMEN'), $ak_n);
         } else {
@@ -454,6 +466,21 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
     }
 }
 
+
+/* ---------------- Nach dem POST: umleiten (B11) ----------------
+ *
+ * Befund Oberflaeche 1/2 (29.09.2026): kein Handler leitete um; ein
+ * Neuladen ("Formular erneut senden") schickte einen Test-Schaltbefehl ein
+ * zweites Mal an die Anlage (Warteschlange 0 -> 1 -> 2). Jetzt endet jeder
+ * POST mit 303, auch einer mit ungueltigem Formmerkmal; Meldungen,
+ * Beanstandungen, Selbsttest und Trockenlauf reisen als Einmalmeldung.
+ * Die Downloads (Vorlage, Sicherung) sind oben schon mit exit hinaus.
+ * Scheitert das Schreiben der Einmalmeldung, wird wie bisher direkt
+ * gerendert - so geht keine Meldung verloren. */
+if ($ak_post_roh && ak_einmal_schreiben($ak_meldungen, $ak_fehler, $ak_testausgabe, $ak_trockenlauf)) {
+    header('Location: index.php?form=' . rawurlencode(substr($ak_tab, 4)), true, 303);
+    exit;
+}
 
 if ($ak_rahmen) {
     LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/', 'help.html');

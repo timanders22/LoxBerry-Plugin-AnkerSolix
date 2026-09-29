@@ -57,6 +57,23 @@ trap ak_marke_weg EXIT
 # von heute morgen und eine von heute abend dasselbe ergeben. Der Tag v3.6.3
 # ist auf der Release-Seite des Projekts nachgesehen, nicht geraten.
 LIBTAG="v3.6.3"
+
+# ---------- Nur einmal je Einbau (Befund Installer 2) ----------
+# LoxBerry ruft beim Upgrade postinstall UND postupgrade auf, und
+# postupgrade.sh leitet hierher weiter (Regeln/06, BatterieBMS B47): bis
+# 0.9.21 lief dieses Skript zweimal, installierte zweimal ueber pip, und der
+# zweite Lauf meldete "Der Dienst lief vor dem Upgrade nicht", obwohl der
+# erste ihn gerade gestartet hatte. Der Merker traegt Auspackordner ($1) UND
+# Fassung ($4) - ein spaeterer Einbau hat eine andere Kennung. Er liegt NEBEN
+# dem Datenordner und wird erst am Ende eines GELUNGENEN Laufs geschrieben:
+# bricht der erste Lauf ab, holt der zweite nach, was fehlt.
+EINBAU="$BASE/data/plugins/$PFOLDER.postinstall_lauf"
+KENNUNG="$(basename "${1:-ohne-tempordner}")|${4:-ohne-fassung}"
+if [ -f "$EINBAU" ] && [ "$(cat "$EINBAU" 2>/dev/null)" = "$KENNUNG" ]; then
+    echo "<INFO> postinstall lief in diesem Einbau bereits - der zweite Aufruf"
+    echo "<INFO> aus postupgrade.sh wird uebersprungen."
+    exit 0
+fi
 LIBURL="git+https://github.com/thomluther/anker-solix-api.git@${LIBTAG}"
 
 mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten"          "$PDATA/verlauf" "$PDATA/energie" || {
@@ -66,11 +83,18 @@ mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten"        
 chmod 755 "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
 
 # ---------- Konfiguration ----------
-[ -f "$PCONFIG/ankersolix.json" ] || echo '{}' > "$PCONFIG/ankersolix.json"
+[ -f "$PCONFIG/ankersolix.json" ] || ( umask 077 && echo '{}' > "$PCONFIG/ankersolix.json" )
 if [ ! -f "$PCONFIG/zugang.json" ]; then
-    echo '{}' > "$PCONFIG/zugang.json"
+    ( umask 077 && echo '{}' > "$PCONFIG/zugang.json" )
 fi
 chmod 600 "$PCONFIG/zugang.json"
+# Die Konfiguration traegt das Aktionstoken, die Zweitschrift ebenso: bis
+# 0.9.21 entstanden beide mit 0644 (am Geraet gemessen 29.09.2026). Bei jeder
+# Installation und jedem Upgrade auf 0600 ziehen - das berichtigt auch
+# bestehende Anlagen.
+chmod 600 "$PCONFIG/ankersolix.json" 2>/dev/null
+[ -f "$BASE/config/plugins/$PFOLDER.backup.ankersolix.json" ] \
+    && chmod 600 "$BASE/config/plugins/$PFOLDER.backup.ankersolix.json" 2>/dev/null
 
 # ---------- INHALT statt Anfuehrungszeichen ----------
 #
@@ -122,6 +146,14 @@ ak_inhalt() {   # $1 Datei, $2 Art: konf | zugang
 # <datei>.kaputt (0600) liegen. Kopiert wird in eine Nebendatei, die dann
 # umbenannt wird; gemeldet wird, was nachgelesen wurde, nicht der
 # Rueckgabewert von cp.
+#
+# Zurueckgespielt wird nur bei einer AKTUALISIERUNG, also wenn die Marke aus
+# preupgrade.sh dieses Vorgangs liegt (Befund Installer 1): bis 0.9.21 holte
+# eine Neuinstallation Kontopasswort, altes Aktionstoken und die Freigabe
+# schreibender Befehle aus liegengebliebenen Zweitschriften zurueck. Ohne
+# Marke werden sie nach <name>.alt verschoben - auch damit die Selbstheilung
+# der Oberflaeche (ak_config) sie nicht mehr findet - und einmal gemeldet.
+BEISEITE=""
 for f in ankersolix.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
@@ -129,6 +161,15 @@ for f in ankersolix.json zugang.json; do
     case "$f" in zugang.json) ART=zugang ;; *) ART=konf ;; esac
     ak_inhalt "$CF" "$ART"; CF_RC=$?
     [ "$CF_RC" = 0 ] && continue
+    if [ ! -f "$MARKE" ]; then
+        if mv -f "$BK" "$BK.alt" 2>/dev/null; then
+            chmod 600 "$BK.alt" 2>/dev/null
+            BEISEITE="$BEISEITE $BK.alt"
+        else
+            echo "<WARNING> $BK liess sich nicht beiseitelegen und wurde NICHT eingespielt."
+        fi
+        continue
+    fi
     if [ "$CF_RC" = 2 ]; then
         # Ohne php laeuft die Oberflaeche nicht, der Dienst meldet nichts.
         # Wie bis 0.9.18 wird dann nur eine leere Datei ersetzt - ohne Zusage.
@@ -160,6 +201,9 @@ for f in ankersolix.json zugang.json; do
         echo "<WARNING> Die Sicherung liegt unveraendert unter $BK."
     fi
 done
+if [ -n "$BEISEITE" ]; then
+    echo "<WARNING> Einstellungen einer frueheren Installation wurden nicht uebernommen (keine Aktualisierung), sondern beiseitegelegt:$BEISEITE"
+fi
 chmod 600 "$PCONFIG/zugang.json"
 
 # ---------- Python suchen ----------
@@ -343,6 +387,14 @@ chmod 600 "$PCONFIG/zugang.json"
 # der Installation, danach genau ein Dienst.
 LIEF="$BASE/config/plugins/$PFOLDER.backup.lief"
 DIENST_LIEF=0
+# Nur ein Merker aus DIESEM Vorgang zaehlt (Regeln/06, Ergaenzung 17.09.):
+# ohne Upgrade-Marke stammt er aus einer frueheren Installation und startet
+# nichts.
+if [ -f "$LIEF" ] && [ ! -f "$MARKE" ]; then
+    rm -f "$LIEF"
+    echo "<INFO> Ein alter Merker \"Dienst lief\" aus einer frueheren Installation"
+    echo "<INFO> wurde entfernt; der Dienst wird nicht von selbst gestartet."
+fi
 if [ -f "$LIEF" ]; then
     DIENST_LIEF=1
     if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" start --trotz-marke >/dev/null 2>&1; then
@@ -366,9 +418,22 @@ fi
 # sind da". Ist die Rueckholung gescheitert, erscheint die Anleitung. Ohne php
 # (Rueckgabe 2) ist das nicht pruefbar; dann steht sie ebenfalls.
 # Gemessen am 24.09.2026: Pruefung-AnkerSolix-0.9.20/postinstall_hinweis.md.
-ak_inhalt "$PCONFIG/zugang.json" zugang
-if [ "$?" = 0 ]; then
+#
+# "Einstellungen uebernommen" nur, wenn AUCH die Konfiguration Inhalt traegt
+# (Befund Installer 5): bis 0.9.21 stand die Zeile auch dann, wenn das
+# Aktionstoken verloren war.
+ak_inhalt "$PCONFIG/zugang.json" zugang; ZG_RC=$?
+ak_inhalt "$PCONFIG/ankersolix.json" konf; KF_RC=$?
+if [ "$ZG_RC" = 0 ] && [ "$KF_RC" = 0 ]; then
     echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen (Anker-Zugangsdaten vorhanden)."
+    if [ "$DIENST_LIEF" = 0 ]; then
+        echo "<INFO> Der Dienst lief vor dem Upgrade nicht und wurde nicht gestartet"
+        echo "<INFO> (Reiter Einstellungen)."
+    fi
+elif [ "$ZG_RC" = 0 ]; then
+    echo "<WARNING> Aktualisierung abgeschlossen, aber die Konfiguration wurde NICHT uebernommen (kein Aktionstoken)."
+    echo "<WARNING> Beim naechsten Oeffnen der Oberflaeche entsteht ein neues Aktionstoken -"
+    echo "<WARNING> die Adressen im Miniserver muessen dann neu eingetragen werden."
     if [ "$DIENST_LIEF" = 0 ]; then
         echo "<INFO> Der Dienst lief vor dem Upgrade nicht und wurde nicht gestartet"
         echo "<INFO> (Reiter Einstellungen)."
@@ -378,4 +443,6 @@ else
     echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, Anker-Zugangsdaten eintragen"
     echo "<INFO> und den Dienst im Reiter Einstellungen starten."
 fi
+printf '%s' "$KENNUNG" > "$EINBAU" 2>/dev/null \
+    || echo "<WARNING> Der Einbaumerker $EINBAU liess sich nicht schreiben."
 exit 0

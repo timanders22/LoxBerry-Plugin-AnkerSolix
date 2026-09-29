@@ -319,6 +319,9 @@ _LAUF = True
 _LOG = logging.getLogger("ankersolix")
 _LETZTE_MELDUNG: dict[str, float] = {}
 _LETZTE_MQTT: dict[str, str] = {}
+# Zeitpunkt (monotone Uhr) des letzten Vollversands bei "nur Aenderungen".
+_LETZTE_VOLL: float | None = None
+VOLLSATZ_ABSTAND = 1800
 _ZAEHLWERK = {"anfragen": 0, "fehler": 0, "http429": 0, "anmeldungen": 0}
 
 
@@ -431,15 +434,26 @@ def benachrichtigen(schwere: int, text: str, schluessel: str = "", sekunden: int
     jetzt = time.time()
     if jetzt - _LETZTE_MELDUNG.get("notify_" + schluessel, 0) < sekunden:
         return
-    _LETZTE_MELDUNG["notify_" + schluessel] = jetzt
+    # Die Sperre gilt erst nach einer GELUNGENEN Meldung (Befund Code 8): bis
+    # 0.9.21 wurde sie vor dem Versuch gesetzt und der Rueckgabewert
+    # verworfen - ein kaputter Meldeweg blieb stumm und unterdrueckte die
+    # naechste Meldung sechs Stunden lang.
     if not NOTIFY.is_file():
+        melde_gebremst("notify", f"Benachrichtigung nicht moeglich: {NOTIFY.name} fehlt.")
         return
     try:
-        subprocess.run(["php", str(NOTIFY), str(int(schwere)), text, PNAME],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=15, check=False)
+        erg = subprocess.run(["php", str(NOTIFY), str(int(schwere)), text, PNAME],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                             timeout=15, check=False)
     except (OSError, subprocess.SubprocessError) as err:
         melde_gebremst("notify", f"Benachrichtigung nicht moeglich: {err}")
+        return
+    if erg.returncode != 0:
+        zeilen = (erg.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        grund = zeilen[0].strip()[:200] if zeilen else "keine Ausgabe"
+        melde_gebremst("notify", f"Benachrichtigung gescheitert (Rueckgabe {erg.returncode}): {grund}")
+        return
+    _LETZTE_MELDUNG["notify_" + schluessel] = jetzt
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +601,10 @@ def mqtt_senden(paare: dict, praefix: str) -> None:
             # eines neuen Befehls. Fehlertexte aus der Anker-Cloud koennen
             # mehrzeilig sein - genau die landen hier.
             sauber = str(v).replace("\r", " ").replace("\n", " ").strip()
-            nachricht = f"publish {praefix}/{k} {mqtt_wert_saeubern(sauber)}".encode("utf-8")
+            # Nie eine leere Nutzlast (Befund MQTT M5): das Gateway reicht sie
+            # als Leerwert weiter, retained loeschte sie den Stand im Broker.
+            wert = mqtt_wert_saeubern(sauber) or "-"
+            nachricht = f"publish {praefix}/{k} {wert}".encode("utf-8")
             s.sendto(nachricht, ("127.0.0.1", z["udpport"]))
     except OSError as err:
         melde_gebremst("mqtt_senden", f"MQTT: Senden fehlgeschlagen ({err}).")
@@ -624,13 +641,28 @@ def mqtt_paare(lox: dict) -> dict:
             paare["anlagen"] = lox.get("anzahl_anlagen")
         elif thema.startswith("anlageN/"):
             rest = thema[len("anlageN/"):]
+            # Das Abbild fuehrt die Prognose als prognose_rest; das Thema
+            # heisst weiter prognose (Befund MQTT M1: bis 0.9.21 nie gesendet).
+            quelle = "prognose_rest" if rest == "prognose" else rest
             for nummer, a in anlagen.items():
-                paare[f"anlage{nummer}/{rest}"] = _tief(a, rest)
+                paare[f"anlage{nummer}/{rest}"] = _tief(a, quelle)
         elif thema.startswith("geraet/<SN>/"):
             rest = thema[len("geraet/<SN>/"):]
             for sn, g in geraete.items():
                 paare[f"geraet/{sn}/{rest}"] = _tief(g, rest)
     return paare
+
+
+def praefix_gueltig(s) -> bool:
+    """Themen-Praefix pruefen - dieselbe Regel wie ak_topic_gueltig() in
+    webfrontend/html/ak_lib.php (Befund MQTT M6): nicht leer, nur A-Z a-z 0-9
+    _ - /, kein Schraegstrich am Anfang oder Ende, keine zwei hintereinander,
+    hoechstens 64 Zeichen."""
+    if not isinstance(s, str) or not s.strip() or len(s) > 64:
+        return False
+    if not all(c.isascii() and (c.isalnum() or c in "_-/") for c in s):
+        return False
+    return not s.startswith("/") and not s.endswith("/") and "//" not in s
 
 
 def mqtt_ausgeben(lox: dict, cfg: dict, ok: int) -> None:
@@ -647,9 +679,16 @@ def mqtt_ausgeben(lox: dict, cfg: dict, ok: int) -> None:
     Zeitpunkt des letzten ERFOLGREICHEN Abrufs; genau daran erkennt die
     Gegenseite den Ausfall.
     """
+    global _LETZTE_VOLL
     if not cfg.get("mqtt_ein"):
         return
-    praefix = str(cfg.get("mqtt_topic") or "ankersolix").strip("/") or "ankersolix"
+    # Ein ungueltiges Praefix faellt nicht still auf "ankersolix" zurueck
+    # (Befund MQTT M6): gemeldet wird, gesendet nicht.
+    praefix = cfg.get("mqtt_topic")
+    if not praefix_gueltig(praefix):
+        melde_gebremst("mqtt_praefix", f"MQTT: das Themen-Praefix {praefix!r} ist ungueltig - "
+                                       "nichts gesendet. Bitte im Reiter MQTT berichtigen.")
+        return
     if not ok:
         mqtt_senden({"ok": 0, "ts": lox.get("ts"), "fehler": lox.get("fehler") or "-"}, praefix)
         return
@@ -659,6 +698,12 @@ def mqtt_ausgeben(lox: dict, cfg: dict, ok: int) -> None:
         # Nur senden, was sich geaendert hat - aber ok/ts/fehler IMMER. Wer nur
         # bei Aenderungen sendet, hoert bei einer Stoerung einfach auf, und in
         # Loxone sieht ein toter Dienst dann aus wie ein ruhiges Haus.
+        # Alle 30 Minuten der volle Satz (Regeln/07; Befund MQTT M3): ein
+        # verlorenes Datagramm fehlt sonst bis zur naechsten Aenderung.
+        jetzt = time.monotonic()
+        if _LETZTE_VOLL is None or jetzt - _LETZTE_VOLL >= VOLLSATZ_ABSTAND:
+            _LETZTE_MQTT.clear()
+            _LETZTE_VOLL = jetzt
         gefiltert = {}
         for k, v in paare.items():
             if k in ("ok", "ts", "fehler"):
@@ -913,6 +958,8 @@ def energie_fortschreiben(nummer: int, energie: dict, tage: int) -> dict:
         zeilen[datum] = neu
 
     grenze = time.strftime("%Y-%m-%d", time.localtime(time.time() - tage * 86400))
+    # Die Zaehler aus den Zeilen VOR dem Kappen (Befund Code 2).
+    zaehler = zaehler_fortschreiben(datei, zeilen, grenze)
     zeilen = {k: v for k, v in zeilen.items() if k >= grenze}
 
     try:
@@ -923,20 +970,60 @@ def energie_fortschreiben(nummer: int, energie: dict, tage: int) -> dict:
         os.replace(tmp, datei)
     except OSError as err:
         melde_gebremst("energie_csv", f"Tagesenergien nicht schreibbar: {err}")
+    return zaehler
 
+
+def zaehler_fortschreiben(datei: Path, zeilen: dict, grenze: str) -> dict:
+    """Zaehlerstaende, die nur steigen (Befund Code 2, 29.09.2026).
+
+    Bis 0.9.21 war der Zaehler die Summe ueber die aufbewahrten Tage. Er fiel,
+    sobald ein Tag aus dem Fenster fiel, die Aufbewahrung verkleinert wurde
+    oder die Cloud einen Tageswert nach unten berichtigte - gegen die Zusage
+    oben und in der Hilfe.
+
+    Jetzt fuehrt ein Merker neben der CSV (<csv>.zaehler.json) je Feld die
+    Summe und den hoechsten schon gezaehlten Wert je Tag. Hinzu kommt nur das
+    Plus, ein Rueckgang wird nie abgezogen. Tage ausserhalb des Fensters
+    fallen aus dem Merker, die Summe bleibt. Ohne Merker (erster Lauf) oder
+    ohne Eintrag fuer ein Feld beginnt die Summe bei der Fenstersumme der
+    vorliegenden Zeilen - so springt kein bestehender Zaehler.
+    Rueckgabe nur fuer Felder, die je einen Wert hatten.
+    """
+    merkdatei = datei.with_name(datei.name + ".zaehler.json")
+    merker = json_lesen(merkdatei)
+    vorher = json.dumps(merker, sort_keys=True)
     zaehler = {}
     for i, feld in enumerate(FELDER_ENERGIE, start=1):
-        summe = 0.0
-        gefunden = False
+        m = merker.get(feld)
+        gefunden = isinstance(m, dict)
+        if not gefunden:
+            m = {}
+        try:
+            summe = float(m.get("summe") or 0)
+        except (TypeError, ValueError):
+            summe = 0.0
+        tage_m = m.get("tage") if isinstance(m.get("tage"), dict) else {}
         for k in sorted(zeilen):
             try:
-                if zeilen[k][i] != "":
-                    summe += float(zeilen[k][i])
-                    gefunden = True
+                roh = zeilen[k][i]
+                if roh == "":
+                    continue
+                wert = float(roh)
             except (IndexError, ValueError):
                 continue
+            gefunden = True
+            try:
+                bisher = float(tage_m.get(k, 0))
+            except (TypeError, ValueError):
+                bisher = 0.0
+            summe += max(0.0, wert - bisher)
+            tage_m[k] = max(wert, bisher)
         if gefunden:
+            tage_m = {k: v for k, v in tage_m.items() if k >= grenze}
+            merker[feld] = {"summe": round(summe, 6), "tage": tage_m}
             zaehler[feld] = round(summe, 2)
+    if json.dumps(merker, sort_keys=True) != vorher:
+        json_schreiben(merkdatei, merker)
     return zaehler
 
 
@@ -1651,10 +1738,14 @@ async def dienst(einmal: bool = False, freigeben: bool = False) -> int:
             # Meldeweg: erst wenn das Abbild wirklich zu alt geworden ist.
             # Ein einzelner Aussetzer ist kein Anlass - drei Stunden Stille
             # sind einer, und niemand merkt sie von selbst.
-            lox_alter = int(time.time()) - int((json_lesen(DATEI_LOXONE).get("ts") or 0))
-            if not ok and lox_alter > int(cfg["melden_alter"]):
-                benachrichtigen(3, f"Anker SOLIX: seit {lox_alter // 60} min kein erfolgreicher "
-                                   f"Abruf. Letzte Meldung: {fehler or 'unbekannt'}", "abruf_alt")
+            # ts 0 heisst "noch nie" (Befund Code 3) - keine Rechnung ab 1970.
+            lox_ts = int(json_lesen(DATEI_LOXONE).get("ts") or 0)
+            lox_alter = int(time.time()) - lox_ts if lox_ts > 0 else -1
+            if not ok and (lox_alter < 0 or lox_alter > int(cfg["melden_alter"])):
+                seit = (f"seit {lox_alter // 60} min kein erfolgreicher Abruf" if lox_alter >= 0
+                        else "bisher kein erfolgreicher Abruf")
+                benachrichtigen(3, f"Anker SOLIX: {seit}. Letzte Meldung: {fehler or 'unbekannt'}",
+                                "abruf_alt")
 
             if ok:
                 await rueckfall_pruefen(api, cfg)
@@ -1833,9 +1924,14 @@ def selbsttest() -> int:
     z2 = json_lesen(DATEI_ZUSTAND)
     if z2:
         lox = json_lesen(DATEI_LOXONE)
-        alter = int(time.time()) - int(lox.get("ts") or 0)
-        zeilen.append(f"[INFO] Letzter ERFOLGREICHER Abruf vor {alter} s, ok={z2.get('ok')}, "
-                      f"Fehler: {z2.get('fehler') or 'keiner'}")
+        lox_ts = int(lox.get("ts") or 0)
+        if lox_ts > 0:
+            zeilen.append(f"[INFO] Letzter ERFOLGREICHER Abruf vor {int(time.time()) - lox_ts} s, "
+                          f"ok={z2.get('ok')}, Fehler: {z2.get('fehler') or 'keiner'}")
+        else:
+            # ts 0 heisst "noch nie" (Befund Code 3).
+            zeilen.append(f"[INFO] Noch kein ERFOLGREICHER Abruf, ok={z2.get('ok')}, "
+                          f"Fehler: {z2.get('fehler') or 'keiner'}")
         zw = z2.get("zaehlwerk") or {}
         if zw:
             zeilen.append(f"[INFO] Zaehlwerk: {zw.get('anfragen', 0)} Abrufe, "

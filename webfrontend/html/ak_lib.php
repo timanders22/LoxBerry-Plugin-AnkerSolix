@@ -180,6 +180,41 @@ function ak_vorgaben()
     );
 }
 
+/**
+ * Grenzen der Zahlenfelder - EINE Stelle fuer das Formular und das
+ * Zurueckspielen (Befund Oberflaeche 4; Regeln/04 "Eine Grenze steht genau
+ * einmal"). Der naheliegende Name ak_grenzen() ist vergeben (Hauslast je
+ * Anlage, weiter unten).
+ */
+function ak_zahlgrenzen()
+{
+    return array(
+        'intervall'      => array(30, 900),
+        'takt_details'   => array(1, 240),
+        'takt_energie'   => array(1, 240),
+        'takt_prognose'  => array(1, 1440),
+        'endpunkt_limit' => array(1, 60),
+        'anfrage_pause'  => array(0, 100),
+        'anfrage_frist'  => array(5, 60),
+        'hauslast_min'   => array(0, 5000),
+        'hauslast_max'   => array(0, 5000),
+        'verlauf_tage'   => array(1, 90),
+        'energie_tage'   => array(1, 3650),
+        'schreibbremse'  => array(0, 3600),
+        'schrittweite'   => array(0, 1000),
+        'rueckfall_min'  => array(0, 1440),
+        'melden_alter'   => array(60, 86400),
+        'wartezeit'      => array(0, 20),
+    );
+}
+
+/** Die Haken: gespeichert als 0 oder 1 (int). */
+function ak_haken_felder()
+{
+    return array('ohne_details', 'ohne_energie', 'ohne_prognose', 'zaehler_ein',
+                 'mqtt_ein', 'mqtt_nur_aenderung', 'steuerung_ein', 'melden_ein');
+}
+
 /** Die Schluessel, die auch der Dienst kennen muss. */
 function ak_vorgaben_dienst()
 {
@@ -252,9 +287,18 @@ function ak_json_schreiben($pfad, $daten, $rechte = null)
     if ($rechte !== null) {
         @chmod($tmp, $rechte);
     }
-    $ok = ftruncate($fh, 0) && fwrite($fh, $json) !== false;
-    fflush($fh);
-    fclose($fh);
+    /* Geschrieben ist erst, was GANZ geschrieben ist und sich so zuruecklesen
+     * laesst (Befund Code 1, 29.09.2026): bei voller Karte liefert fwrite()
+     * eine kleinere Zahl, nicht false - rename() ersetzte die heile Datei
+     * durch die abgeschnittene, und der Aufrufer meldete Erfolg. */
+    $n = ftruncate($fh, 0) ? @fwrite($fh, $json) : false;
+    $ok = ($n === strlen($json));
+    $ok = @fflush($fh) && $ok;
+    $ok = @fclose($fh) && $ok;
+    if ($ok) {
+        clearstatcache(true, $tmp);
+        $ok = (@file_get_contents($tmp) === $json);
+    }
     if (!$ok) {
         @unlink($tmp);
         return false;
@@ -329,7 +373,7 @@ function ak_config($erzeugen = true)
         $sich = ak_json_lesen($p['sicherung'], $sstand);
         if ($sstand === 'ok' && $sich) {
             $cfg = $sich;
-            if ($erzeugen && ak_json_schreiben($p['config'], $cfg)) {
+            if ($erzeugen && ak_json_schreiben($p['config'], $cfg, 0600)) {
                 ak_log_wenn_neu('config_geheilt',
                     'Die Konfiguration fehlte oder war unlesbar und wurde aus der Zweitschrift wiederhergestellt.');
             }
@@ -341,11 +385,13 @@ function ak_config($erzeugen = true)
 function ak_config_speichern($cfg)
 {
     $p = ak_paths();
-    if (!ak_json_schreiben($p['config'], $cfg)) {
+    // 0600: die Konfiguration traegt das Aktionstoken (Befund Code 11).
+    if (!ak_json_schreiben($p['config'], $cfg, 0600)) {
         return false;
     }
-    // Die Zweitschrift wird erst NACH dem gelungenen Schreiben erneuert.
-    ak_json_schreiben($p['sicherung'], $cfg);
+    // Die Zweitschrift wird erst erneuert, wenn die Konfiguration ganz
+    // geschrieben und zurueckgelesen gleich ist - das prueft der Helfer.
+    ak_json_schreiben($p['sicherung'], $cfg, 0600);
     return true;
 }
 
@@ -433,6 +479,24 @@ function ak_formtoken_gueltig($cfg, $eingang)
     return hash_equals($soll, $eingang);
 }
 
+/**
+ * Themen-Praefix pruefen - EINE Stelle fuer Formular und Sicherung (Befund
+ * MQTT M6). Nicht leer, nur A-Z a-z 0-9 _ - /, kein Schraegstrich am Anfang
+ * oder Ende, keine zwei hintereinander, hoechstens 64 Zeichen; # und +
+ * fallen damit ebenso heraus wie Leerzeichen. Der Dienst prueft dasselbe
+ * (praefix_gueltig() in bin/ankersolix.py).
+ */
+function ak_topic_gueltig($s)
+{
+    if (!is_string($s) || trim($s) === '') {
+        return false;
+    }
+    if (!preg_match('#^[A-Za-z0-9_/\-]{1,64}\z#', $s)) {
+        return false;
+    }
+    return $s[0] !== '/' && substr($s, -1) !== '/' && strpos($s, '//') === false;
+}
+
 /* ---------------- Zwischenspeicher lesen ---------------- */
 
 function ak_loxone()
@@ -488,7 +552,10 @@ function ak_geraete()
 function ak_alter()
 {
     $l = ak_loxone();
-    return isset($l['ts']) ? max(0, time() - (int) $l['ts']) : -1;
+    // ts 0 heisst "noch nie" (Befund Code 3): der Dienst schreibt 0, solange
+    // kein Abruf gelungen ist.
+    $ts = isset($l['ts']) ? (int) $l['ts'] : 0;
+    return $ts > 0 ? max(0, time() - $ts) : -1;
 }
 
 /* ---------------- Laeuft gerade eine Aktualisierung? ---------------- */
@@ -647,11 +714,11 @@ function ak_waechter_stand()
 function ak_dienst($befehl)
 {
     if (!in_array($befehl, array('start', 'stop', 'restart'), true)) {
-        return array(0, 'Unbekannter Befehl.');
+        return array(0, ak_t('EINST.DIENST_UNBEKANNT'));
     }
     $skript = ak_paths()['bindir'] . '/dienst.sh';
     if (!is_file($skript)) {
-        return array(0, 'dienst.sh nicht gefunden: ' . $skript);
+        return array(0, sprintf(ak_t('EINST.DIENST_SKRIPT_FEHLT'), $skript));
     }
     $ausgabe = array();
     $code = 0;
@@ -937,14 +1004,14 @@ function ak_befehl_absetzen($befehl, $wartezeit = null)
 
     $ordner = $p['datadir'] . '/befehle';
     if (!is_dir($ordner) && !@mkdir($ordner, 0775, true) && !is_dir($ordner)) {
-        return array(0, 'Der Ordner fuer die Warteschlange liess sich nicht anlegen: ' . $ordner);
+        return array(0, sprintf(ak_t('TEST.M_ABLAGE_ORDNER'), $ordner));
     }
     $kennung = bin2hex(random_bytes(8));
     $datei = $ordner . '/' . $kennung . '.json';
     $tmp = $datei . '.tmp';
     if (@file_put_contents($tmp, json_encode($befehl)) === false || !@rename($tmp, $datei)) {
         @unlink($tmp);
-        return array(0, 'Der Befehl liess sich nicht ablegen: ' . $datei);
+        return array(0, sprintf(ak_t('TEST.M_ABLAGE_DATEI'), $datei));
     }
     $antwort = $p['datadir'] . '/antworten/' . $kennung . '.json';
     for ($i = 0; $i < $wartezeit * 10; $i++) {
@@ -955,7 +1022,7 @@ function ak_befehl_absetzen($befehl, $wartezeit = null)
         }
         usleep(100000);
     }
-    return array(2, 'Eingereiht, aber der Dienst hat innerhalb von ' . $wartezeit . ' s nicht geantwortet.');
+    return array(2, sprintf(ak_t('TEST.M_EINGEREIHT'), $wartezeit));
 }
 
 /* ---------------- Verlauf ---------------- */
@@ -1307,13 +1374,20 @@ function ak_xml_virtual_in_http($kopf, $cmds)
 {
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    /* Nachgezogen auf die Fassung aus APC-UPS 1.2.7 (29.09.2026): HintText
+     * vorn, <Info templateType="2">, Unit und eigene Grenzen je Befehl. Die
+     * Fassung aus APC-UPS 1.0.0 kannte das nicht - in Loxone Config standen
+     * nackte Zahlen ohne Einheit (Regeln/07, "Unit ist Pflicht"). */
     $o .= '<VirtualInHttp ';
+    $o .= 'HintText="' . ak_x(isset($kopf['hint']) ? $kopf['hint'] : '') . '" ';
     $o .= 'Title="' . ak_x($kopf['title']) . '" ';
     $o .= 'Comment="' . ak_x(isset($kopf['comment']) ? $kopf['comment'] : '') . '" ';
     $o .= 'Address="' . ak_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
     $o .= 'PollingTime="' . ak_x(isset($kopf['polling']) ? $kopf['polling'] : '60') . '"';
     $o .= '>' . $crlf;
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
     foreach ($cmds as $c) {
+        $einheit = isset($c['einheit']) ? trim((string) $c['einheit']) : '';
         $o .= "\t" . '<VirtualInHttpCmd ';
         $o .= 'Title="' . ak_x($c['title']) . '" ';
         $o .= 'Comment="' . ak_x(isset($c['comment']) ? $c['comment'] : '') . '" ';
@@ -1325,8 +1399,10 @@ function ak_xml_virtual_in_http($kopf, $cmds)
         $o .= 'SourceValHigh="100" ';
         $o .= 'DestValHigh="100" ';
         $o .= 'DefVal="0" ';
-        $o .= 'MinVal="-2147483647" ';
-        $o .= 'MaxVal="2147483647"';
+        $o .= 'MinVal="' . ak_x(isset($c['min']) ? $c['min'] : -2147483647) . '" ';
+        $o .= 'MaxVal="' . ak_x(isset($c['max']) ? $c['max'] : 2147483647) . '" ';
+        $o .= 'Unit="' . ak_x($einheit === '' ? '<v.1>' : '<v.1> ' . $einheit) . '" ';
+        $o .= 'HintText=""';
         $o .= '/>' . $crlf;
     }
     $o .= '</VirtualInHttp>' . $crlf;
@@ -1539,10 +1615,21 @@ function ak_vorlage($satz = 'status', $nummer = 1, $sn = '')
         // aufloesen - sonst stuende in Loxone Config wortwoertlich
         // 'l&auml;dt' statt 'laedt'.
         $bedeutung = trim(strip_tags(html_entity_decode(ak_t($info[1]), ENT_QUOTES, 'UTF-8')));
+        /* Grenzen sind in Loxone eine VALIDIERUNG: ein Wert darueber wird 0
+         * (Regeln/07). Deshalb weit genug fuer jeden Wert, den das Plugin
+         * senden kann; ALTER kann -1 sein ("noch nie abgerufen"), Leistungen
+         * sind vorzeichenbehaftet. Fehlende Werte gehen als "-" hinaus und
+         * beruehren die Grenzen nicht. */
+        $grenzen = array('%' => array(0, 100), 'W' => array(-1000000, 1000000),
+                         'kWh' => array(0, 1000000000), 's' => array(-1, 2147483647));
+        $g = isset($grenzen[$info[0]]) ? $grenzen[$info[0]] : array(-2147483647, 2147483647);
         $cmds[] = array(
             'title'   => $praefix . '_' . $feld,
-            'comment' => $bedeutung . ($info[0] !== '' ? ' [' . $info[0] . ']' : ''),
+            'comment' => $bedeutung,
             'check'   => ak_check($feld),
+            'einheit' => $info[0],
+            'min'     => $g[0],
+            'max'     => $g[1],
         );
     }
     if ($satz === 'geraet') {
@@ -1718,7 +1805,10 @@ function ak_endpunkt_probe($frist = 3)
         $rumpf = (string) curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $fehler = (string) curl_error($ch);
-        curl_close($ch);
+        // Seit PHP 8.0 wirkungslos, unter 8.5 als ueberholt gemeldet.
+        if (PHP_VERSION_ID < 80000) {
+            curl_close($ch);
+        }
     } else {
         // Ohne die curl-Erweiterung ueber Streams. php-curl steht NICHT in
         // dpkg/apt, ist also nicht zugesichert - deshalb function_exists().
@@ -1726,11 +1816,8 @@ function ak_endpunkt_probe($frist = 3)
             'timeout' => (int) $frist, 'ignore_errors' => true,
             'header' => 'Host: ' . ak_host() . "\r\n",
         )));
-        $rumpf = (string) @file_get_contents($url, false, $ctx);
-        if (isset($http_response_header[0])
-            && preg_match('#HTTP/[0-9.]+\s+([0-9]{3})#', $http_response_header[0], $m)) {
-            $code = (int) $m[1];
-        }
+        list($ak_roh, $code) = ak_http_abruf($url, $ctx);
+        $rumpf = $ak_roh === false ? '' : (string) $ak_roh;
     }
 
     if ($code === 0 && trim($rumpf) === '') {
@@ -1741,6 +1828,35 @@ function ak_endpunkt_probe($frist = 3)
     }
     return array(0, sprintf(ak_t('TEST.A_ENDPUNKT_FEHL'),
         $code, substr(trim(preg_replace('/\s+/', ' ', $rumpf)), 0, 160)));
+}
+
+/**
+ * Eine Adresse abrufen und den HTTP-Code aus den Kopfzeilen lesen.
+ * Rueckgabe: array(Inhalt oder false, Code; 0 = kein Code erkennbar).
+ *
+ * Ueber fopen() und stream_get_meta_data() statt ueber die alte
+ * Kopfzeilen-Variable von PHP: 8.5 meldet sie als ueberholt (Kette
+ * 29.09.2026). Bauform eb_http_abruf() aus Einspeisebremse 0.9.28; die
+ * Kopfzeilen im wrapper_data gibt es unter 7.4 wie unter 8.x.
+ */
+function ak_http_abruf($url, $ctx)
+{
+    $fp = @fopen($url, 'r', false, $ctx);
+    if ($fp === false) {
+        return array(false, 0);
+    }
+    $meta = @stream_get_meta_data($fp);
+    $t = @stream_get_contents($fp);
+    @fclose($fp);
+    $code = 0;
+    $kopf = (is_array($meta) && isset($meta['wrapper_data']) && is_array($meta['wrapper_data']))
+        ? $meta['wrapper_data'] : array();
+    foreach ($kopf as $z) {
+        if (is_string($z) && preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $m)) {
+            $code = (int) $m[1];
+        }
+    }
+    return array($t, $code);
 }
 
 /* ==================================================================
@@ -1831,21 +1947,48 @@ function ak_t($schluessel)
  * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
  * stammen aus einer anderen Fassung oder einem anderen Plugin.
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
+ * Zugangsdaten|null).
  */
 function ak_sicherung_lesen($roh)
 {
     $mangel = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(ak_t('EINST.SICH_KEIN_JSON')), 0);
+        return array(null, array(ak_t('EINST.SICH_KEIN_JSON')), 0, null);
     }
     $neu = ak_vorgaben();
     $bekannt = array_keys($neu);
+    $zugang = array();
     $anzahl = 0;
     foreach ($daten as $k => $w) {
+        $k = (string) $k;
+        // Der lesbare Kopf (_hinweis ...) wird ueberlesen.
+        if ($k !== '' && $k[0] === '_') {
+            continue;
+        }
+        // Zugangsdaten gehoeren in zugang.json, nicht in die Konfiguration.
+        if ($k === 'email' || $k === 'passwort') {
+            $f = !is_string($w) ? ak_t('EINST.SICH_TEXT')
+                : (($k === 'email' && $w !== '' && filter_var($w, FILTER_VALIDATE_EMAIL) === false)
+                    ? ak_t('EINST.FEHLER_EMAIL') : '');
+            if ($f !== '') {
+                $mangel[] = ak_e($k) . ': ' . $f;
+            } else {
+                $zugang[$k] = $w;
+                $anzahl++;
+            }
+            continue;
+        }
         if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(ak_t('EINST.SICH_FREMD'), ak_e((string) $k));
+            $mangel[] = sprintf(ak_t('EINST.SICH_FREMD'), ak_e($k));
+            continue;
+        }
+        // Jeder Wert wird geprueft (Befund Oberflaeche 4) - gesammelt, nicht
+        // der erste; eine halb gueltige Datei aendert nichts.
+        $f = ak_sicherung_wert($k, $w);
+        if ($f !== '') {
+            $mangel[] = ak_e($k) . ': ' . $f;
             continue;
         }
         $neu[$k] = $w;
@@ -1853,6 +1996,14 @@ function ak_sicherung_lesen($roh)
     }
     if ($anzahl === 0) {
         $mangel[] = ak_t('EINST.SICH_LEER');
+    }
+    // Wie das Formular: kleinste nicht ueber groesster - nur wenn beide
+    // Werte aus der Datei angenommen wurden.
+    if (isset($daten['hauslast_min'], $daten['hauslast_max'])
+        && $neu['hauslast_min'] === $daten['hauslast_min']
+        && $neu['hauslast_max'] === $daten['hauslast_max']
+        && $neu['hauslast_min'] > $neu['hauslast_max']) {
+        $mangel[] = ak_t('EINST.FEHLER_HAUSLAST_TAUSCH');
     }
     /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
      *
@@ -1881,5 +2032,169 @@ function ak_sicherung_lesen($roh)
         $mangel[] = sprintf(ak_t('EINST.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    // Rueckgabe: array(Konfiguration|null, Beanstandungen, Anzahl,
+    // Zugangsdaten|null). email/passwort duerfen fehlen (aeltere Sicherung).
+    return array($mangel ? null : $neu, $mangel, $anzahl, ($mangel || !$zugang) ? null : $zugang);
+}
+
+/**
+ * Einen Wert der Sicherung pruefen: Typ wie in ak_vorgaben(), Grenzen wie
+ * im Formular (ak_zahlgrenzen()), Auswahl nur aus der erlaubten Liste.
+ * Rueckgabe: '' = gueltig, sonst die Beanstandung.
+ */
+function ak_sicherung_wert($k, $w)
+{
+    $zahlen = ak_zahlgrenzen();
+    if (isset($zahlen[$k])) {
+        // is_int: true/false und "5" werden abgewiesen, nicht umgedeutet.
+        return (is_int($w) && $w >= $zahlen[$k][0] && $w <= $zahlen[$k][1])
+            ? '' : sprintf(ak_t('EINST.SICH_ZAHL'), $zahlen[$k][0], $zahlen[$k][1]);
+    }
+    if (in_array($k, ak_haken_felder(), true)) {
+        return ($w === 0 || $w === 1) ? '' : ak_t('EINST.SICH_HAKEN');
+    }
+    switch ($k) {
+        case 'land':
+            // Wie das Formular: zwei Grossbuchstaben (eine feste Liste gibt es nicht).
+            return (is_string($w) && preg_match('/^[A-Z]{2}\z/', $w)) ? '' : ak_t('EINST.SICH_LAND');
+        case 'rueckfall_modus':
+            return (is_string($w) && array_key_exists($w, ak_modi()))
+                ? '' : sprintf(ak_t('EINST.SICH_AUSWAHL'), implode(', ', array_keys(ak_modi())));
+        case 'mqtt_topic':
+            return ak_topic_gueltig($w) ? '' : ak_t('EINST.FEHLER_TOPIC');
+        case 'aktionstoken':
+            return (is_string($w) && preg_match('/^[A-Za-z0-9]{16,64}\z/', $w)) ? '' : ak_t('EINST.SICH_TOKEN');
+        case 'anlagen_grenzen':
+            return ak_sicherung_grenzen_gueltig($w) ? '' : ak_t('EINST.SICH_GRENZEN');
+    }
+    // Ein kuenftiger Schluessel ohne eigene Regel: wenigstens der Typ der Vorgabe.
+    $v = ak_vorgaben();
+    return (array_key_exists($k, $v) && gettype($w) === gettype($v[$k])) ? '' : ak_t('EINST.SICH_TEXT');
+}
+
+/**
+ * anlagen_grenzen so, wie das Formular sie baut: je Anlagennummer (1-99)
+ * genau min und max, jedes '' oder hoechstens vier Ziffern (als Zeichenkette
+ * wie aus dem Formular, oder als Zahl), min nicht groesser als max.
+ */
+function ak_sicherung_grenzen_gueltig($w)
+{
+    if (!is_array($w)) {
+        return false;
+    }
+    foreach ($w as $nr => $g) {
+        if (!preg_match('/^[1-9][0-9]?\z/', (string) $nr) || !is_array($g)) {
+            return false;
+        }
+        $s = array_keys($g);
+        sort($s);
+        if ($s !== array('max', 'min')) {
+            return false;
+        }
+        foreach (array('min', 'max') as $f) {
+            $v = $g[$f];
+            if (is_int($v)) {
+                if ($v < 0 || $v > 9999) {
+                    return false;
+                }
+            } elseif (!is_string($v) || ($v !== '' && !preg_match('/^[0-9]{1,4}\z/', $v))) {
+                return false;
+            }
+        }
+        if ((string) $g['min'] !== '' && (string) $g['max'] !== '' && (int) $g['min'] > (int) $g['max']) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Die Sicherungsdatei bauen: lesbarer Kopf, alle Einstellungen, dazu E-Mail
+ * und Passwort aus zugang.json (Hausstandard: die Datei traegt alle
+ * Zugangsdaten; Befund Oberflaeche 3). Die Fassung fragt LoxBerry nach dem
+ * Ordnernamen (pluginversion(<ordner>)); ohne LoxBerry steht '?'.
+ */
+function ak_sicherung_bauen()
+{
+    $p = ak_paths();
+    $fassung = '';
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'pluginversion')) {
+        $fassung = (string) LBSystem::pluginversion($p['plugin']);
+    }
+    $z = ak_json_lesen($p['zugang']);
+    $kopf = array('_hinweis' => sprintf(ak_t('EINST.SICH_KOPF'), $p['plugin'],
+        $fassung !== '' ? $fassung : '?', date('Y-m-d H:i:s')));
+    $zugang = array(
+        'email'    => isset($z['email']) ? (string) $z['email'] : '',
+        'passwort' => isset($z['passwort']) ? (string) $z['passwort'] : '',
+    );
+    return json_encode($kopf + ak_config() + $zugang,
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+/* ---------------- Einmalmeldung nach dem POST (B11) ----------------
+ *
+ * Jeder POST endet mit 303 (Regeln/04); was die Seite danach zeigen soll,
+ * reist in dieser Datei: im Datenordner, 0600, beim naechsten GET gelesen
+ * und geloescht, aelter als 120 s verworfen. Bauform eb_einmal_*() aus
+ * Einspeisebremse 0.9.28. Passwort und Aktionstoken werden vor dem
+ * Schreiben unkenntlich gemacht (Regeln/04, Nachtrag Raumklima 17.09.).
+ */
+function ak_einmal_schreiben($meldungen, $fehler, $test, $trocken)
+{
+    $p = ak_paths();
+    $geheim = array();
+    $cfg = ak_config(false);
+    $z = ak_json_lesen($p['zugang']);
+    foreach (array(isset($cfg['aktionstoken']) ? $cfg['aktionstoken'] : '',
+                   isset($z['passwort']) ? $z['passwort'] : '') as $g) {
+        if (is_string($g) && strlen($g) >= 4) {
+            $geheim[] = $g;
+            $geheim[] = ak_e($g);
+        }
+    }
+    $weg = function ($t) use ($geheim) {
+        return $geheim ? str_replace($geheim, '***', (string) $t) : (string) $t;
+    };
+    $zeilen = array();
+    foreach ((array) $trocken as $r) {
+        if (is_array($r) && count($r) >= 2) {
+            $zeilen[] = array((int) $r[0], $weg($r[1]));
+        }
+    }
+    return ak_json_schreiben($p['datadir'] . '/einmalmeldung.json', array(
+        'zeit'      => time(),
+        'meldungen' => array_map($weg, array_values((array) $meldungen)),
+        'fehler'    => array_map($weg, array_values((array) $fehler)),
+        'test'      => $weg($test),
+        'trocken'   => $zeilen,
+    ), 0600);
+}
+
+function ak_einmal_lesen()
+{
+    $f = ak_paths()['datadir'] . '/einmalmeldung.json';
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = json_decode((string) @file_get_contents($f), true);
+    @unlink($f);
+    if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) {
+        return null;
+    }
+    $liste = function ($x) {
+        return is_array($x) ? array_values(array_map('strval', array_filter($x, 'is_scalar'))) : array();
+    };
+    $zeilen = array();
+    foreach ((isset($d['trocken']) && is_array($d['trocken'])) ? $d['trocken'] : array() as $r) {
+        if (is_array($r) && isset($r[0], $r[1])) {
+            $zeilen[] = array((int) $r[0], (string) $r[1]);
+        }
+    }
+    return array(
+        'meldungen' => $liste(isset($d['meldungen']) ? $d['meldungen'] : null),
+        'fehler'    => $liste(isset($d['fehler']) ? $d['fehler'] : null),
+        'test'      => isset($d['test']) ? (string) $d['test'] : '',
+        'trocken'   => $zeilen,
+    );
 }
