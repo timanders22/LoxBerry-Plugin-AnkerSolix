@@ -1009,10 +1009,12 @@ if ($ak_rahmen) {
 <p class="sm-hilfe"><?= ak_t('MQTT.THEMEN_ERKLAERUNG') ?></p>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th><?= ak_e(ak_t('MQTT.T_THEMA')) ?></th><th><?= ak_e(ak_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
+<tr><th><?= ak_e(ak_t('MQTT.T_THEMA')) ?></th><th><?= ak_e(ak_t('MQTT.T_BEDEUTUNG')) ?></th><th><?= ak_e(ak_t('MQTT.T_RETAINED')) ?></th></tr>
+<?php $ak_retained = ak_retain_themen(); ?>
 <?php foreach (ak_mqtt_themen() as $ak_thema => $ak_schluessel) { ?>
 <tr><td><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic'] . '/' . $ak_thema) ?></span></td>
-    <td><?= ak_t($ak_schluessel) ?></td></tr>
+    <td><?= ak_t($ak_schluessel) ?></td>
+    <td><?= $ak_retained === null ? ak_e(ak_t('MQTT.RETAINED_UNBEKANNT')) : (in_array($ak_thema, $ak_retained, true) ? ak_e(ak_t('ALLG.JA')) : ak_e(ak_t('ALLG.NEIN'))) ?></td></tr>
 <?php } ?>
 </table>
 </div>

@@ -157,7 +157,10 @@ function ak_zeile($kennung, $satz, $werte)
 
 $ak_lox = ak_loxone();
 $ak_alter = ak_alter();
-$ak_ok = (!empty($ak_lox['ok']) && $ak_alter >= 0) ? 1 : 0;
+// OK=0 auch dann, wenn der letzte Erfolg laenger zurueckliegt als drei Takte
+// (Entscheidung des Hausherrn 29.09.2026): ein Dienst, der nicht mehr
+// abruft, liess bis 0.9.21 OK=1 stehen. ALTER bleibt unveraendert daneben.
+$ak_ok = (!empty($ak_lox['ok']) && $ak_alter >= 0 && $ak_alter <= ak_ok_grenze($ak_cfg)) ? 1 : 0;
 
 /* ================= Lesende Aktionen ================= */
 

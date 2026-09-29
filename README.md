@@ -16,6 +16,23 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.22 — Zustände bleiben im Broker, OK merkt einen stehenden Dienst
+
+- **Zustände gehen retained hinaus.** Anlagenzahl, Anlagenname, Betriebsart, Sollwerte, Reserve, Einspeiseschalter
+  und -grenze, Firmware und die Erreichbarkeit eines Geräts (`online`) bleiben im Broker stehen; nach einem Neustart von
+  Miniserver oder Gateway sind sie sofort wieder da. Messwerte, Tages- und Zählerwerte, Prognose, `ok`, `ts` und `fehler`
+  gehen nie retained hinaus. Welche Themen retained sind, zeigt der Reiter MQTT in einer eigenen Spalte; der Reiter Test
+  prüft die Tabelle. Bis 0.9.21 ging kein Thema retained hinaus, obwohl der Hinweis das behauptete.
+- **Die Deinstallation räumt die zurückbehaltenen Themen ab** (nur unter dem eingestellten Präfix, nur wenn MQTT
+  eingeschaltet war; drei Durchgänge, weil der UDP-Eingang des Gateways unter Last Pakete verwirft — bestätigt wird das
+  Abräumen nicht).
+- **`OK` am Endpunkt ist 0, sobald `ALTER` das Dreifache des Abruftakts übersteigt.** Bisher blieb `OK=1` stehen, auch
+  wenn der Dienst seit Stunden nicht mehr lief. `ALTER` ist unverändert. Der Reiter Test benutzt dieselbe Grenze.
+- `online` wird nicht mehr als 0 gemeldet, wenn die Cloud den Wert gar nicht liefert; er wird dann nicht gesendet.
+
+**Für bestehende Anlagen:** In Loxone muss nichts geändert werden. Wer den Anzeigenamen der OK-Eingänge in einer neuen
+Vorlage sehen will, importiert neu (Loxone Config legt dann neue Bausteine an und überschreibt nichts).
+
 ## Version 0.9.21 — volle Karte, Sicherung, Zähler und ein Neustart jede Minute
 
 Durchsicht vom 29.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT); jeder Punkt ist gemessen

@@ -168,6 +168,30 @@ if [ -x "$PY" ] && [ -f "$SKRIPT" ] && [ -f "$PCONFIG/ankersolix.json" ] \
     fi
 fi
 
+# ---------- 2b. Zurueckbehaltene MQTT-Themen abraeumen ----------
+# Seit 0.9.22 gehen Zustaende retained hinaus (Entscheidung des Hausherrn
+# 29.09.2026). Ohne dieses Abraeumen blieben sie nach dem Entfernen fuer immer
+# im Broker und kaemen nach jedem Neustart von Gateway oder Miniserver als
+# frisch heraus. Nur eigene Themen unter dem eingestellten Praefix und nur,
+# wenn MQTT eingeschaltet war. Die Themen kommen aus MQTT_RETAINED im Dienst
+# und dem letzten Abbild - deshalb VOR dem Abraeumen des Datenordners, und
+# NACH dem Anhalten, damit der Dienst nichts nachschiebt.
+AK_PY="$PY"
+[ -x "$AK_PY" ] || AK_PY=$(command -v python3 2>/dev/null)
+if [ -n "$AK_PY" ] && [ -f "$SKRIPT" ]; then
+    if command -v timeout >/dev/null 2>&1; then
+        ABR=$(LBHOMEDIR="$BASE" timeout -k 5 60 "$AK_PY" "$SKRIPT" --abraeumen 2>/dev/null)
+    else
+        ABR=$(LBHOMEDIR="$BASE" "$AK_PY" "$SKRIPT" --abraeumen 2>/dev/null)
+    fi
+    ABR_RC=$?
+    if [ -n "$ABR" ]; then
+        echo "$ABR"
+    elif [ "$ABR_RC" != 0 ]; then
+        echo "<WARNING> Die zurueckbehaltenen MQTT-Themen liessen sich nicht abraeumen (Rueckgabe $ABR_RC)."
+    fi
+fi
+
 # ---------- 3. Sicherungen und Daten abraeumen ----------
 ANZAHL=0
 # Dazu die .alt, die postinstall.sh bei einer Neuinstallation beiseitelegt

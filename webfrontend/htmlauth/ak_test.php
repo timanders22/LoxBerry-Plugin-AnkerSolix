@@ -253,7 +253,8 @@ function ak_pruefungen()
     if ($alter < 0) {
         $zeilen[] = ak_pruefzeile(0, ak_t('TEST.F_ABRUF'), ak_t('TEST.A_NIE_ABGERUFEN'));
     } else {
-        $frisch = $alter <= max(120, 3 * (int) $cfg['intervall']);
+        // Dieselbe Grenze wie OK am Endpunkt (3 x wirksamer Takt), nicht eine zweite.
+        $frisch = $alter <= ak_ok_grenze($cfg);
         $zeilen[] = ak_pruefzeile($frisch ? 1 : 0, ak_t('TEST.F_ABRUF'),
             sprintf(ak_t('TEST.A_ABRUF_ALTER'), $alter));
     }
@@ -324,6 +325,9 @@ function ak_pruefungen()
 
     list($stand, $text) = ak_themen_abgleich();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_THEMEN'), $text);
+
+    list($stand, $text) = ak_retain_abgleich();
+    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_RETAIN'), $text);
 
     list($stand, $text) = ak_muster_eindeutig();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_MUSTER'), $text);

@@ -558,6 +558,32 @@ function ak_alter()
     return $ts > 0 ? max(0, time() - $ts) : -1;
 }
 
+/**
+ * Der Abruftakt, wie ihn der Dienst faehrt: config() in bin/ankersolix.py
+ * nimmt die Vorgabe, wenn der Wert fehlt oder keine Zahl ist, und kappt auf
+ * die Grenzen aus ak_zahlgrenzen(). Dieselbe Rechnung hier - sonst misst OK
+ * gegen einen Takt, den der Dienst gar nicht faehrt.
+ */
+function ak_takt_wirksam($cfg)
+{
+    $v = ak_vorgaben();
+    $g = ak_zahlgrenzen();
+    $w = (is_array($cfg) && isset($cfg['intervall'])) ? $cfg['intervall'] : null;
+    if ($w === null || $w === '' || is_bool($w) || !is_numeric($w)) {
+        $w = $v['intervall'];
+    }
+    return max($g['intervall'][0], min($g['intervall'][1], (int) $w));
+}
+
+/**
+ * Ab diesem ALTER meldet der Endpunkt OK=0: dem Dreifachen des Abruftakts
+ * (Entscheidung des Hausherrn 29.09.2026). ALTER selbst bleibt unveraendert.
+ */
+function ak_ok_grenze($cfg)
+{
+    return 3 * ak_takt_wirksam($cfg);
+}
+
 /* ---------------- Laeuft gerade eine Aktualisierung? ---------------- */
 
 /**
@@ -1350,9 +1376,65 @@ function ak_themen_abgleich()
         return array(1, sprintf(ak_t('TEST.A_THEMEN_OK'), count($hier)));
     }
     $s = array();
-    if ($nur_hier) { $s[] = ak_t('TEST.A_THEMEN_NUR_LISTE') . ': ' . implode(', ', $nur_hier); }
-    if ($nur_dort) { $s[] = ak_t('TEST.A_THEMEN_NUR_CODE') . ': ' . implode(', ', $nur_dort); }
+    // Themennamen wie geraet/<SN>/fw maskieren - sonst verschluckt der Browser sie als Tag.
+    if ($nur_hier) { $s[] = ak_t('TEST.A_THEMEN_NUR_LISTE') . ': ' . htmlspecialchars(implode(', ', $nur_hier), ENT_QUOTES, 'UTF-8'); }
+    if ($nur_dort) { $s[] = ak_t('TEST.A_THEMEN_NUR_CODE') . ': ' . htmlspecialchars(implode(', ', $nur_dort), ENT_QUOTES, 'UTF-8'); }
     return array(0, implode(' | ', $s));
+}
+
+/**
+ * Die Retain-Tabelle des Dienstes (MQTT_RETAINED in bin/ankersolix.py).
+ *
+ * Sie steht an EINER Stelle, im Dienst, der danach sendet; die Oberflaeche
+ * liest sie nur (Regeln/07: "Die Retain-Tabelle gehoert in die gemeinsame
+ * Datei, aus der auch die Oberflaeche sie liest"). Rueckgabe: Liste der
+ * Themenstaemme, oder null, wenn der Block nicht lesbar ist - dann zeigt die
+ * Spalte "unbekannt", nie ein geratenes "nein".
+ */
+function ak_retain_themen()
+{
+    $p = ak_paths();
+    $py = $p['bindir'] . '/ankersolix.py';
+    if (!is_file($py)) {
+        $py = dirname(dirname(__DIR__)) . '/bin/ankersolix.py';
+    }
+    if (!is_file($py)) {
+        return null;
+    }
+    $quelle = (string) @file_get_contents($py);
+    if (!preg_match('/^MQTT_RETAINED\s*=\s*\((.*?)\)\s*\n/ms', $quelle, $m)) {
+        return null;
+    }
+    preg_match_all('/"([^"]+)"/', $m[1], $t);
+    return $t[1];
+}
+
+/**
+ * Die Retain-Tabelle pruefen: lesbar, nicht leer, nur Themen der Liste, und
+ * weder Lebenszeichen noch Dienstaussage darin (ok, ts, fehler - Regeln/07,
+ * Entscheidungen 03.09., 18.09. und 19.09.2026).
+ *
+ * Rueckgabe: array(stand, text)
+ */
+function ak_retain_abgleich()
+{
+    $r = ak_retain_themen();
+    if ($r === null) {
+        return array(-1, ak_t('TEST.A_RETAIN_UNBEKANNT'));
+    }
+    if (!$r) {
+        return array(0, ak_t('TEST.A_RETAIN_LEER'));
+    }
+    $liste = array_keys(ak_mqtt_themen());
+    $fremd = array_values(array_diff($r, $liste));
+    $leben = array_values(array_intersect($r, array('ok', 'ts', 'fehler')));
+    $s = array();
+    if ($fremd) { $s[] = ak_t('TEST.A_RETAIN_FREMD') . ': ' . ak_e(implode(', ', $fremd)); }
+    if ($leben) { $s[] = ak_t('TEST.A_RETAIN_LEBEN') . ': ' . ak_e(implode(', ', $leben)); }
+    if ($s) {
+        return array(0, implode(' | ', $s));
+    }
+    return array(1, sprintf(ak_t('TEST.A_RETAIN_OK'), count($r), count($liste)));
 }
 
 /* ==================================================================

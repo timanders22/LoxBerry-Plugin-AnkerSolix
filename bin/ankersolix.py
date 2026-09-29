@@ -315,6 +315,58 @@ MQTT_THEMEN = (
     "geraet/<SN>/fw",
 )
 
+# ---------------------------------------------------------------------------
+# Welche Themen gehen retained hinaus - DIE eine Stelle (Entscheidung des
+# Hausherrn 29.09.2026, Regeln/07 "Hausstandard seit 03.09.2026").
+#
+# Retained sind Zustaende und Einstellungen: Anlagenzahl, Name, Betriebsart,
+# Sollwerte, Reserve, Einspeiseschalter und -grenze, Firmware und ob die Cloud
+# das Geraet erreicht. Nie retained sind Leistungen, Ladezustand, Tages- und
+# Zaehlerwerte, Prognose und WLAN-Signal (Messwerte mit Zeitbezug) sowie
+# ok, ts und fehler (Lebenszeichen bzw. Aussage des Dienstes ueber sich).
+#
+# Die Oberflaeche liest diesen Block fuer die Spalte "retained" im Reiter
+# MQTT (ak_retain_themen in ak_lib.php); der Reiter Test haelt ihn gegen
+# MQTT_THEMEN. Ein Thema, das hier fehlt, geht fluechtig hinaus. Eine leere
+# Nutzlast geht nie hinaus (mqtt_senden schickt dann "-"), denn ein leeres
+# retain loescht das Thema im Broker.
+# ---------------------------------------------------------------------------
+MQTT_RETAINED = (
+    "anlagen",
+    "anlageN/sollwert",
+    "anlageN/modus",
+    "anlageN/reserve",
+    "anlageN/einspeisung",
+    "anlageN/einspeisegrenze",
+    "anlageN/name",
+    "geraet/<SN>/sollwert",
+    "geraet/<SN>/online",
+    "geraet/<SN>/fw",
+)
+
+# So oft schickt die Deinstallation die Abraeumzeilen: der UDP-Eingang des
+# Gateways verwirft unter Last, und sendto() meldet auch dann Erfolg
+# (Regeln/07, Nachtrag 19.09.2026). Wiederholen senkt den Verlust, belegt
+# aber nichts.
+ABRAEUMEN_RUNDEN = 3
+
+
+def themenstamm(thema: str) -> str:
+    """'anlage2/modus' -> 'anlageN/modus', 'geraet/<sn>/fw' -> 'geraet/<SN>/fw'."""
+    teile = thema.split("/")
+    if len(teile) >= 2 and teile[0].startswith("anlage") and teile[0][6:].isdigit():
+        return "anlageN/" + "/".join(teile[1:])
+    if len(teile) >= 3 and teile[0] == "geraet":
+        return "geraet/<SN>/" + "/".join(teile[2:])
+    return thema
+
+
+def mqtt_befehl(thema: str) -> str:
+    """Befehlswort fuer den UDP-Eingang des Gateways V1: 'retain' nur fuer
+    Themen der Tabelle, sonst 'publish' - auch fuer jedes unbekannte."""
+    return "retain" if themenstamm(thema) in MQTT_RETAINED else "publish"
+
+
 _LAUF = True
 _LOG = logging.getLogger("ankersolix")
 _LETZTE_MELDUNG: dict[str, float] = {}
@@ -604,7 +656,9 @@ def mqtt_senden(paare: dict, praefix: str) -> None:
             # Nie eine leere Nutzlast (Befund MQTT M5): das Gateway reicht sie
             # als Leerwert weiter, retained loeschte sie den Stand im Broker.
             wert = mqtt_wert_saeubern(sauber) or "-"
-            nachricht = f"publish {praefix}/{k} {wert}".encode("utf-8")
+            # Befehlswort je Thema aus MQTT_RETAINED, nicht je Aufruf: derselbe
+            # Aufruf traegt Zustaende und das Lebenszeichen (Regeln/07).
+            nachricht = f"{mqtt_befehl(k)} {praefix}/{k} {wert}".encode("utf-8")
             s.sendto(nachricht, ("127.0.0.1", z["udpport"]))
     except OSError as err:
         melde_gebremst("mqtt_senden", f"MQTT: Senden fehlgeschlagen ({err}).")
@@ -651,6 +705,71 @@ def mqtt_paare(lox: dict) -> dict:
             for sn, g in geraete.items():
                 paare[f"geraet/{sn}/{rest}"] = _tief(g, rest)
     return paare
+
+
+def mqtt_abraeumen_themen(lox: dict) -> list[str]:
+    """Die konkreten retained Themen zum letzten Abbild: Anlagennummern und
+    Seriennummern aus loxone.json, Themenstaemme aus MQTT_RETAINED."""
+    anlagen = lox.get("anlagen") if isinstance(lox.get("anlagen"), dict) else {}
+    geraete = lox.get("geraete") if isinstance(lox.get("geraete"), dict) else {}
+    out: list[str] = []
+    for thema in MQTT_THEMEN:
+        if thema not in MQTT_RETAINED:
+            continue
+        if thema.startswith("anlageN/"):
+            out += [f"anlage{n}/{thema[len('anlageN/'):]}" for n in anlagen]
+        elif thema.startswith("geraet/<SN>/"):
+            out += [f"geraet/{sn}/{thema[len('geraet/<SN>/'):]}" for sn in geraete]
+        else:
+            out.append(thema)
+    return out
+
+
+def mqtt_abraeumen() -> int:
+    """--abraeumen: die retained Themen dieses Plugins im Broker loeschen.
+
+    Aufgerufen von der Deinstallation. Nur eigene Themen unter dem
+    eingestellten Praefix, und nur, wenn MQTT eingeschaltet ist. Die Zeile
+    'retain <thema> ' mit leerem Wert loescht das Thema im Gateway (Regeln/07,
+    am Geraet 17.09./19.09.2026). Schreibt keine Datei und kein Protokoll -
+    der Installer ruft das womoeglich als root.
+    """
+    cfg = config()
+    if not cfg.get("mqtt_ein"):
+        print("<INFO> MQTT war nicht eingeschaltet - keine zurueckbehaltenen Themen abzuraeumen.")
+        return 0
+    praefix = cfg.get("mqtt_topic")
+    if not praefix_gueltig(praefix):
+        print(f"<WARNING> Das Themen-Praefix {praefix!r} ist ungueltig - zurueckbehaltene Themen "
+              "wurden nicht abgeraeumt.")
+        return 1
+    themen = mqtt_abraeumen_themen(json_lesen(DATEI_LOXONE))
+    z = mqtt_zustand()
+    if not z["udpport"]:
+        print(f"<WARNING> Kein UDP-Eingangsport des MQTT-Gateways gefunden - die {len(themen)} "
+              f"zurueckbehaltenen Themen unter {praefix}/ wurden nicht abgeraeumt.")
+        return 1
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError as err:
+        print(f"<WARNING> MQTT: Socket nicht moeglich ({err}) - nichts abgeraeumt.")
+        return 1
+    try:
+        for runde in range(ABRAEUMEN_RUNDEN):
+            if runde:
+                time.sleep(1)
+            for t in themen:
+                s.sendto(f"retain {praefix}/{t} ".encode("utf-8"), ("127.0.0.1", z["udpport"]))
+                time.sleep(0.02)
+    except OSError as err:
+        print(f"<WARNING> MQTT: Abraeumen fehlgeschlagen ({err}).")
+        return 1
+    finally:
+        s.close()
+    print(f"<INFO> {len(themen)} zurueckbehaltene MQTT-Themen unter {praefix}/ zum Loeschen an das "
+          f"Gateway geschickt ({ABRAEUMEN_RUNDEN} Durchgaenge). Ob sie angekommen sind, meldet der "
+          "UDP-Eingang nicht; nachsehen mit mosquitto_sub --retained-only.")
+    return 0
 
 
 def praefix_gueltig(s) -> bool:
@@ -866,7 +985,9 @@ def geraet_abbilden(sn: str, d: dict, zusatz: dict) -> dict:
         "sollwert": zahl(erstes(d, "set_output_power", "preset_system_output_power")),
         "status": str(erstes(d, "charging_status", "status") or ""),
         "status_text": str(erstes(d, "charging_status_desc", "status_desc") or ""),
-        "online": 1 if str(erstes(d, "wifi_online") or "").lower() in ("1", "true") else 0,
+        # Fehlt wifi_online in der Antwort, ist die Erreichbarkeit nicht gemessen:
+        # None (wird nicht gesendet) statt einer erfundenen 0, die retained bliebe.
+        "online": schalter(erstes(d, "wifi_online")),
         "wlan": zahl(d.get("wifi_signal")),
         "fw": str(d.get("sw_version") or ""),
         "fw_neu": str(zusatz.get("fw_neu") or ""),
@@ -1965,6 +2086,9 @@ def main() -> int:
               "aus einem ausgepackten Archiv oder einer Kopie wird nichts gestartet.",
               file=sys.stderr)
         return 1
+    # Vor log_einrichten(): das Abraeumen der Deinstallation schreibt nichts.
+    if "--abraeumen" in sys.argv:
+        return mqtt_abraeumen()
     log_einrichten()
     if "--selbsttest" in sys.argv:
         return selbsttest()
