@@ -22,6 +22,8 @@ Aufrufe:
     ankersolix.py --selbsttest    Pruefungen ohne Netz, Ausgabe als Klartext
     ankersolix.py --vorgaben      die Vorgabeliste als JSON (fuer den Abgleich
                                   mit ak_vorgaben() in der Oberflaeche)
+    ankersolix.py --themen        die Themen, die der Sendecode bildet, als
+                                  JSON (fuer den Reiter Test; schreibt nichts)
     ankersolix.py --freigeben     einmalig die Betriebsart 'eigenverbrauch'
                                   setzen und beenden; die Deinstallation ruft
                                   das auf, damit kein gestellter Sollwert
@@ -705,6 +707,34 @@ def mqtt_paare(lox: dict) -> dict:
             for sn, g in geraete.items():
                 paare[f"geraet/{sn}/{rest}"] = _tief(g, rest)
     return paare
+
+
+def themen_gebildet() -> list[str]:
+    """--themen (Verbesserung b2, 30.09.2026): die Themenstaemme, die
+    mqtt_paare() WIRKLICH bildet.
+
+    Bis 0.9.23 hielt der Reiter Test die Liste der Oberflaeche nur gegen
+    MQTT_THEMEN - Tabelle gegen Tabelle. 'anlageN/prognose' stand in beiden
+    und wurde nie gesendet (Befund MQTT M1), weil mqtt_paare() einen
+    Schluessel las, den das Abbild nicht fuehrt.
+
+    Das Musterabbild entsteht aus denselben Funktionen wie im Betrieb
+    (anlage_abbilden, geraet_abbilden) mit einer leeren Cloud-Antwort; jede
+    Luecke (None) wird mit einem Platzhalter gefuellt. So fehlt nur ein
+    Thema, dessen Quelle es im Abbild gar nicht gibt. Die Zaehler bildet
+    zaehler_fortschreiben() aus FELDER_ENERGIE - hier ebenso. Schreibt nichts.
+    """
+    def fuellen(x):
+        if isinstance(x, dict):
+            return {k: fuellen(v) for k, v in x.items()}
+        return "x" if x is None else x
+
+    a = anlage_abbilden("S", {}, {"G": {"site_id": "S", "type": "solarbank"}}, {})
+    a["zaehler"] = {f: 0 for f in FELDER_ENERGIE}
+    g = geraet_abbilden("G", {"site_id": "S", "type": "solarbank"}, {})
+    lox = fuellen({"ok": 1, "ts": 1, "fehler": "", "anzahl_anlagen": 1,
+                   "anlagen": {"1": a}, "geraete": {"G": g}})
+    return sorted({themenstamm(k) for k, v in mqtt_paare(lox).items() if v is not None})
 
 
 def mqtt_abraeumen_themen(lox: dict) -> list[str]:
@@ -1620,12 +1650,35 @@ def abbild_schreiben(api, cfg: dict, ok: int, fehler: str = "", zusatz: dict | N
     alt = json_lesen(DATEI_LOXONE)
     ts = int(time.time()) if ok else int(alt.get("ts") or 0)
 
+    # Neustart waehrend einer Stoerung (Verbesserung a2, 30.09.2026): nach
+    # dem Start sind api.sites und api.devices leer, bis update_sites()
+    # einmal gelingt. Bis 0.9.23 stand dann "anlagen": {} im Abbild - der
+    # Endpunkt meldete ANLAGE_UNBEKANNT statt OK=0, und die Deinstallation
+    # fand die retained Themen der Anlagen und Geraete nicht mehr. Jetzt
+    # bleiben die Bloecke des vorigen Abbilds stehen; ok bleibt 0 und ts der
+    # Zeitpunkt des letzten Erfolgs. Gilt nur, solange der Dienst noch keine
+    # Anlage kennt - danach traegt api.sites den Stand wie bisher.
+    uebernommen = False
+    if not ok and not ids:
+        va = alt.get("anlagen")
+        vg = alt.get("geraete")
+        if isinstance(va, dict) and va:
+            anlagen = va
+            uebernommen = True
+        if isinstance(vg, dict) and vg:
+            geraete = vg
+            uebernommen = True
+        if uebernommen:
+            melde_gebremst("vorabbild", f"Abruf gescheitert, bevor der Dienst eine Anlage kannte: "
+                                        f"{len(anlagen)} Anlagen und {len(geraete)} Geraete aus dem "
+                                        f"vorigen Abbild uebernommen (ok=0).", 3600)
+
     lox = {
         "ok": ok,
         "ts": ts,
         "ts_versuch": int(time.time()),
         "fehler": fehler,
-        "anzahl_anlagen": len(ids),
+        "anzahl_anlagen": len(anlagen),
         "zaehlwerk": dict(_ZAEHLWERK),
         "anlagen": anlagen,
         "geraete": geraete,
@@ -1642,7 +1695,8 @@ def abbild_schreiben(api, cfg: dict, ok: int, fehler: str = "", zusatz: dict | N
                     if k not in ("password", "token", "auth_token")},
     })
 
-    for nummer, a in anlagen.items():
+    # Uebernommene Werte sind kein neuer Messpunkt (a2).
+    for nummer, a in ({} if uebernommen else anlagen).items():
         verlauf_anhaengen(int(nummer), a.get("soc"), a.get("batp"), cfg["verlauf_tage"])
 
     mqtt_ausgeben(lox, cfg, ok)
@@ -2076,6 +2130,10 @@ def main() -> int:
     # aus, damit die Oberflaeche sie gegen ihre eigene halten kann.
     if "--vorgaben" in sys.argv:
         print(json.dumps(VORGABEN, ensure_ascii=False, sort_keys=True))
+        return 0
+    # --themen ebenso (b2): die gebildeten Themen fuer den Reiter Test.
+    if "--themen" in sys.argv:
+        print(json.dumps(themen_gebildet(), ensure_ascii=False))
         return 0
     # Dienst, Einmallauf und Freigabe schreiben in Daten- und Logordner. Aus
     # einem Pruefarchiv oder einer Baumkopie heraus waere das die laufende

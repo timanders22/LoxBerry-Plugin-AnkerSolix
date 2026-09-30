@@ -25,7 +25,8 @@
  *   einspeisegrenze &watt=<W>      [&anlage=N][&sn=..]
  *   notstromreserve &prozent=<%>   [&anlage=N][&sn=..]
  *   pvlimit         &watt=<W>      &sn=<Seriennummer>
- *   abruf                          sofortiger Abruf statt Warten auf den Takt
+ *   abruf                          sofortiger Abruf statt Warten auf den Takt,
+ *                                  hoechstens alle 30 s (sonst 429 mit WARTEN_S)
  *
  * Der Endpunkt spricht NIE selbst mit der Anker-Cloud. Lesende Aktionen
  * beantwortet er aus dem Zwischenspeicher, schaltende legt er in einer
@@ -53,8 +54,14 @@ $ak_p = ak_paths();
 
 /* ---------------- Token ---------------- */
 $ak_soll = (string) $ak_cfg['aktionstoken'];
-$ak_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
-$ak_aktion = isset($_GET['aktion']) ? (string) $_GET['aktion'] : 'status';
+// Nur Zeichenketten zaehlen (Nachtrag 30.09.2026): aus ?token[]=x machte
+// (string) bis 0.9.23 "Array" samt PHP-Warnung; bei display_errors=1 kam die
+// Abweisung dann mit HTTP 200. Eine Liste gilt als fehlendes Token (403)
+// bzw. als unbekannte Aktion (400).
+$ak_ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
+$ak_aktion = isset($_GET['aktion']) ? (is_string($_GET['aktion']) ? $_GET['aktion'] : '') : 'status';
+// Fuer die Protokollzeile (a4): nur Kleinbuchstaben, hoechstens 20 Zeichen.
+$ak_aktion_log = substr(preg_replace('/[^a-z]/', '', strtolower($ak_aktion)), 0, 20);
 
 /* selftest steht unmittelbar hinter der Token-Pruefung: die Pruefung greift,
  * die Wirkung nicht. Ein Token muss sich pruefen lassen, ohne dass etwas
@@ -62,6 +69,7 @@ $ak_aktion = isset($_GET['aktion']) ? (string) $_GET['aktion'] : 'status';
  * wirklich, dann faehrt der Speicher um, oder man erfaehrt nie, ob die
  * Adresse im Miniserver noch stimmt. */
 if ($ak_soll === '') {
+    ak_endpunkt_log('abweisung', 'kein Token eingerichtet, Aktion ' . $ak_aktion_log);
     http_response_code(403);
     if ($ak_aktion === 'selftest') {
         echo "SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET\n";
@@ -72,6 +80,8 @@ if ($ak_soll === '') {
     exit;
 }
 if (!hash_equals($ak_soll, $ak_ist)) {
+    ak_endpunkt_log('abweisung', ($ak_ist === '' ? 'ohne Token' : 'falsches Token')
+        . ', Aktion ' . $ak_aktion_log);
     http_response_code(403);
     if ($ak_aktion === 'selftest') {
         echo "SELFTEST;OK=0;ERR=TOKEN\n";
@@ -106,7 +116,14 @@ function ak_param($name, $muster, $vorgabe = '')
     if (!isset($_GET[$name]) || $_GET[$name] === '') {
         return $vorgabe;
     }
-    $w = (string) $_GET[$name];
+    // Eine Liste (?name[]=...) ist kein Wert - abweisen, nicht umwandeln.
+    if (!is_string($_GET[$name])) {
+        http_response_code(400);
+        echo "FEHLER;OK=0;GRUND=PARAMETER\n";
+        echo 'Der Wert von ' . $name . " ist keine einzelne Angabe.\n";
+        exit;
+    }
+    $w = $_GET[$name];
     if (!preg_match($muster, $w)) {
         http_response_code(400);
         echo "FEHLER;OK=0;GRUND=PARAMETER\n";
@@ -289,6 +306,10 @@ if ($ak_aktion === 'energie') {
 
 /* ================= Schaltende Aktionen ================= */
 
+// Gebremste Protokollzeile (a4): wer schaltet, steht im Protokoll. Die
+// Seriennummer bleibt draussen - Protokolle landen in Foren.
+ak_endpunkt_log('befehl', 'Aktion ' . $ak_aktion_log . ', Anlage ' . $ak_anlage);
+
 if ($ak_aktion !== 'abruf' && empty($ak_cfg['steuerung_ein'])) {
     http_response_code(403);
     echo "SET;OK=0;GRUND=STEUERUNG_AUS\n";
@@ -302,6 +323,25 @@ if (ak_dienst_pid() === 0) {
     echo "SET;OK=0;GRUND=DIENST_LAEUFT_NICHT\n";
     echo "Der Abrufdienst laeuft nicht. Reiter Einstellungen, Knopf 'Dienst starten'.\n";
     exit;
+}
+
+/* Sofortabruf hoechstens alle 30 s (Verbesserung a3 / X-7, 30.09.2026).
+ * Bis 0.9.23 holte jeder Aufruf die ganze Cloud neu - ein flatternder
+ * Ausgang trieb das Konto in die 429-Sperre. Faellt der Merker aus, wird
+ * abgewiesen (503), nicht durchgelassen. */
+if ($ak_aktion === 'abruf') {
+    $ak_rest = ak_abruf_bremse();
+    if ($ak_rest < 0) {
+        http_response_code(503);
+        echo "SET;OK=0;AKTION=abruf;GRUND=BREMSE_MERKER\n";
+        exit;
+    }
+    if ($ak_rest > 0) {
+        http_response_code(429);
+        header('Retry-After: ' . $ak_rest);
+        echo 'SET;OK=0;AKTION=abruf;GRUND=BREMSE;WARTEN_S=' . $ak_rest . "\n";
+        exit;
+    }
 }
 
 $ak_befehl = array('aktion' => $ak_aktion, 'anlage' => $ak_anlage);

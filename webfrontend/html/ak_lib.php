@@ -335,6 +335,79 @@ function ak_log_wenn_neu($schluessel, $text, $sekunden = 3600)
 }
 
 /**
+ * Gebremste Protokollzeile des Endpunkts (Verbesserung a4, 30.09.2026).
+ *
+ * Bis 0.9.23 schrieb der Endpunkt keine Zeile: ob der Miniserver gar nicht
+ * anruft, mit einem alten Token anruft oder schaltet, war nicht zu
+ * unterscheiden. Jetzt je Weg ('abweisung' = Token fehlt oder falsch,
+ * 'befehl' = schaltende Aktion) hoechstens eine Zeile je $fenster Sekunden,
+ * mit dem Absender aus REMOTE_ADDR. Dazwischen zaehlt der Merker
+ * data/.endpunkt_<weg>.json (unter flock); die naechste Zeile nennt, wie
+ * viele Aufrufe seither nicht einzeln protokolliert wurden, 'gesamt' zaehlt
+ * alle.
+ * Das Token steht nie in der Zeile. Es wird nichts angelegt ausser dem
+ * Merker selbst: fehlt der Daten- oder der Logordner, bleibt es bei der
+ * Antwort - der unangemeldete Endpunkt legt keine Ordner an.
+ * Rueckgabe: true, wenn eine Zeile geschrieben wurde.
+ */
+function ak_endpunkt_log($weg, $text, $fenster = 600)
+{
+    $p = ak_paths();
+    if (!in_array($weg, array('abweisung', 'befehl'), true)
+        || !is_dir($p['datadir']) || !is_dir(dirname($p['log']))) {
+        return false;
+    }
+    $von = isset($_SERVER['REMOTE_ADDR'])
+        ? substr(preg_replace('/[^0-9A-Fa-f:.]/', '', (string) $_SERVER['REMOTE_ADDR']), 0, 45) : '';
+    if ($von === '') {
+        $von = '?';
+    }
+    $fh = @fopen($p['datadir'] . '/.endpunkt_' . $weg . '.json', 'c+');
+    if ($fh === false) {
+        return false;
+    }
+    if (!@flock($fh, LOCK_EX)) {
+        @fclose($fh);
+        return false;
+    }
+    $m = json_decode((string) stream_get_contents($fh), true);
+    if (!is_array($m)) {
+        $m = array();
+    }
+    $letzte = isset($m['letzte_zeile']) ? (int) $m['letzte_zeile'] : 0;
+    $still = isset($m['still']) ? (int) $m['still'] : 0;
+    $gesamt = (isset($m['gesamt']) ? (int) $m['gesamt'] : 0) + 1;
+    $jetzt = time();
+    $geschrieben = false;
+    // Eine zurueckgestellte Uhr ($letzte in der Zukunft) haelt nichts still.
+    if ($jetzt - $letzte >= $fenster || $letzte > $jetzt) {
+        $zeile = '[' . date('Y-m-d H:i:s') . '] ' . ($weg === 'abweisung' ? 'WARNING' : 'INFO')
+               . ' Endpunkt (' . $weg . ') von ' . $von . ': '
+               . str_replace(array("\r", "\n"), ' ', (string) $text);
+        if ($still > 0 && $letzte > 0) {
+            $zeile .= sprintf(' - dazu %d weitere Aufrufe seit %s, nicht einzeln protokolliert',
+                $still, date('Y-m-d H:i:s', $letzte));
+        }
+        $geschrieben = @file_put_contents($p['log'], $zeile . "\n", FILE_APPEND | LOCK_EX) !== false;
+    }
+    if ($geschrieben) {
+        $letzte = $jetzt;
+        $still = 0;
+    } else {
+        $still++;
+    }
+    $neu = json_encode(array('letzte_zeile' => $letzte, 'still' => $still, 'gesamt' => $gesamt,
+                             'letzter_aufruf' => $jetzt, 'letzter_absender' => $von));
+    if (@ftruncate($fh, 0) && @rewind($fh)) {
+        @fwrite($fh, (string) $neu);
+        @fflush($fh);
+    }
+    @flock($fh, LOCK_UN);
+    @fclose($fh);
+    return $geschrieben;
+}
+
+/**
  * Konfiguration lesen.
  *
  * $erzeugen = false: es wird NICHTS angelegt und NICHTS zurueckgeschrieben.
@@ -1009,6 +1082,61 @@ function ak_letzter_schreibbefehl()
     return is_file($f) ? (int) @file_get_contents($f) : 0;
 }
 
+/* ---------------- Sofortabruf-Bremse (Verbesserung a3 / X-7, 30.09.2026) ----
+ *
+ * Ein Sofortabruf holt ALLES neu aus der Cloud. Bis 0.9.23 reihte jeder
+ * Aufruf von aktion=abruf einen ein - ein flatternder Ausgang in Loxone trieb
+ * das Konto so in die 429-Sperre, und die trifft auch die Messwerte.
+ * Jetzt hoechstens einer je ak_abruf_abstand() Sekunden. Der Merker liegt im
+ * Datenordner und wird unter flock gelesen und geschrieben; laesst er sich
+ * nicht oeffnen oder schreiben, faellt die Bremse GESCHLOSSEN aus (Rahmen
+ * X-7, Bauform EVCC 0.9.34).
+ */
+function ak_abruf_abstand()
+{
+    return 30;
+}
+
+/**
+ * Rueckgabe: 0 = frei (und jetzt vermerkt), > 0 = noch so viele Sekunden
+ * warten, -1 = Merker nicht nutzbar (der Aufrufer weist ab).
+ * Eine zurueckgestellte Uhr sperrt hoechstens ak_abruf_abstand() Sekunden.
+ */
+function ak_abruf_bremse()
+{
+    $p = ak_paths();
+    $abstand = ak_abruf_abstand();
+    $f = $p['datadir'] . '/abruf_bremse';
+    $fh = is_dir($p['datadir']) ? @fopen($f, 'c+') : false;
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if ($fh !== false) {
+            @fclose($fh);
+        }
+        ak_log_wenn_neu('abruf_bremse', 'Der Merker der Sofortabruf-Bremse (' . $f . ') laesst sich '
+            . 'nicht oeffnen - aktion=abruf wird mit 503 abgewiesen, bis das behoben ist.');
+        return -1;
+    }
+    $roh = trim((string) stream_get_contents($fh));
+    $letzt = preg_match('/^[0-9]{1,12}$/', $roh) ? (int) $roh : 0;
+    $jetzt = time();
+    $rest = $letzt > 0 ? min($abstand, $letzt + $abstand - $jetzt) : 0;
+    if ($rest > 0) {
+        @flock($fh, LOCK_UN);
+        @fclose($fh);
+        return $rest;
+    }
+    $neu = (string) $jetzt;
+    $ok = @ftruncate($fh, 0) && @rewind($fh) && @fwrite($fh, $neu) === strlen($neu) && @fflush($fh);
+    @flock($fh, LOCK_UN);
+    @fclose($fh);
+    if (!$ok) {
+        ak_log_wenn_neu('abruf_bremse', 'Der Merker der Sofortabruf-Bremse (' . $f . ') laesst sich '
+            . 'nicht schreiben - aktion=abruf wird mit 503 abgewiesen, bis das behoben ist.');
+        return -1;
+    }
+    return 0;
+}
+
 /* ---------------- Befehlswarteschlange ----------------
  *
  * Sowohl der Miniserver-Endpunkt als auch der Reiter Test setzen Befehle ueber
@@ -1343,6 +1471,28 @@ function ak_mqtt_themen()
 }
 
 /**
+ * Die Themen, die der Dienst WIRKLICH bildet: ankersolix.py --themen
+ * (Verbesserung b2, 30.09.2026). null, wenn der Dienst nicht zu fragen ist.
+ */
+function ak_dienst_themen()
+{
+    $p = ak_paths();
+    $py = $p['bindir'] . '/venv/bin/python3';
+    $skript = $p['bindir'] . '/ankersolix.py';
+    if (!is_file($py) || !is_file($skript)) {
+        return null;
+    }
+    $ausgabe = array();
+    $rc = 1;
+    @exec(escapeshellcmd($py) . ' ' . escapeshellarg($skript) . ' --themen 2>/dev/null', $ausgabe, $rc);
+    $d = json_decode(implode('', $ausgabe), true);
+    if ($rc !== 0 || !is_array($d)) {
+        return null;
+    }
+    return array_values(array_filter($d, 'is_string'));
+}
+
+/**
  * Die Themenliste gegen den Sendecode halten.
  *
  * Der teuerste Befund der Renault-Sitzung: Oberflaeche, Baustein-Liste und
@@ -1351,24 +1501,25 @@ function ak_mqtt_themen()
  * standen - ohne Fehlermeldung. Angeglichen wird die Anleitung an den
  * Sendecode, nicht umgekehrt; diese Zeile findet den Unterschied.
  *
+ * Bis 0.9.23 las diese Zeile die Tabelle MQTT_THEMEN aus dem Quelltext des
+ * Dienstes - Tabelle gegen Tabelle. 'anlageN/prognose' stand in beiden und
+ * wurde nie gesendet (Befund MQTT M1), die Zeile zeigte einen Haken. Jetzt
+ * fragt sie den Dienst, welche Themen er aus einem Musterabbild bildet
+ * (--themen), und vergleicht in beiden Richtungen. Laesst er sich nicht
+ * fragen, ist die Zeile grau - "nicht geprueft", nicht "in Ordnung".
+ *
  * Rueckgabe: array(stand, text)
  */
 function ak_themen_abgleich()
 {
-    $p = ak_paths();
-    $py = $p['bindir'] . '/ankersolix.py';
-    if (!is_file($py)) {
-        $py = dirname(dirname(__DIR__)) . '/bin/ankersolix.py';
-    }
-    if (!is_file($py)) {
+    $dienst = ak_dienst_themen();
+    if ($dienst === null) {
         return array(-1, ak_t('TEST.A_THEMEN_UNBEKANNT'));
     }
-    $quelle = (string) @file_get_contents($py);
-    if (!preg_match('/MQTT_THEMEN\s*=\s*\((.*?)\)\s*\n/s', $quelle, $m)) {
-        return array(-1, ak_t('TEST.A_THEMEN_UNBEKANNT'));
+    // Eine leere Menge ist kein Einklang (CLAUDE.md, 6).
+    if (!$dienst) {
+        return array(0, ak_t('TEST.A_THEMEN_LEER'));
     }
-    preg_match_all('/"([^"]+)"/', $m[1], $t);
-    $dienst = $t[1];
     $hier = array_keys(ak_mqtt_themen());
     $nur_hier = array_values(array_diff($hier, $dienst));
     $nur_dort = array_values(array_diff($dienst, $hier));
@@ -1623,28 +1774,71 @@ function ak_felder_zeile($satz)
  * deshalb gut, weil das fuehrende Semikolon dabei ist. Diese Zeile misst das
  * nach, statt es zu behaupten.
  *
+ * Bis 0.9.23 verglich sie ';A=' mit ';B=' fuer zwei VERSCHIEDENE Namen - das
+ * trifft nie, die Zeile konnte nicht anschlagen (Befund b3), und sie fragte
+ * ak_check() gar nicht. Jetzt (Verbesserung b3, 30.09.2026): die Antwortzeile
+ * wird gebaut wie im Endpunkt (Kennung, dann ';FELD=Wert' in der Reihenfolge
+ * von ak_felder_zeile()), der Suchtext kommt aus ak_check() (zwischen den
+ * beiden \i), und sein ERSTER Treffer muss das eigene Feld sein.
+ *
+ * $saetze: fuer die Gegenprobe eine eigene Liste (Satz => Feldnamen); ohne
+ * Angabe die Felder aus ak_felder_zeile().
  * Rueckgabe: array(stand, text)
  */
-function ak_muster_eindeutig()
+function ak_muster_eindeutig($saetze = null)
 {
+    if (!is_array($saetze)) {
+        $saetze = array();
+        foreach (array('status', 'energie', 'geraet') as $satz) {
+            $saetze[$satz] = array_keys(ak_felder_zeile($satz));
+        }
+    }
     $doppel = array();
-    foreach (array('status', 'energie', 'geraet') as $satz) {
-        $namen = array_keys(ak_felder_zeile($satz));
-        foreach ($namen as $a) {
-            foreach ($namen as $b) {
-                if ($a === $b) {
-                    continue;
-                }
-                // Traefe das Muster von $a auch irgendwo in ';'.$b.'='?
-                if (strpos(';' . $b . '=', ';' . $a . '=') !== false) {
-                    $doppel[] = $satz . ': ' . $a . ' in ' . $b;
+    $anzahl = 0;
+    foreach ($saetze as $satz => $namen) {
+        // Eine leere Feldliste ist kein "eindeutig" (CLAUDE.md, 6).
+        if (!is_array($namen) || !$namen) {
+            $doppel[] = $satz . ': ' . ak_t('TEST.A_MUSTER_LEER');
+            continue;
+        }
+        $zeile = 'X';
+        $stellen = array();
+        foreach ($namen as $i => $n) {
+            $stellen[$i] = strlen($zeile);
+            $zeile .= ';' . $n . '=0';
+        }
+        foreach ($namen as $i => $n) {
+            $anzahl++;
+            if (!preg_match('/\\\\i(.+?)\\\\i/', ak_check($n), $m)) {
+                $doppel[] = $satz . ': ' . $n . ' (' . ak_t('TEST.A_MUSTER_KEIN_SUCHTEXT') . ')';
+                continue;
+            }
+            // Wo der Suchtext im EIGENEN Abschnitt ';NAME=Wert' steht - dort
+            // muss sein erster Treffer in der ganzen Zeile liegen.
+            $innen = strpos(';' . $n . '=0', $m[1]);
+            if ($innen === false) {
+                $doppel[] = $satz . ': ' . $n . ' (' . ak_t('TEST.A_MUSTER_FREMD') . ')';
+                continue;
+            }
+            $pos = strpos($zeile, $m[1]);
+            if ($pos === $stellen[$i] + $innen) {
+                continue;
+            }
+            // Wessen Abschnitt trifft der Suchtext zuerst?
+            $bei = '?';
+            if ($pos !== false) {
+                foreach ($stellen as $j => $s) {
+                    if ($s <= $pos) {
+                        $bei = $namen[$j];
+                    }
                 }
             }
+            $doppel[] = $satz . ': ' . $n . ' -> ' . $bei;
         }
     }
     return $doppel
-        ? array(0, sprintf(ak_t('TEST.A_MUSTER_DOPPELT'), implode(', ', $doppel)))
-        : array(1, ak_t('TEST.A_MUSTER_OK'));
+        ? array(0, sprintf(ak_t('TEST.A_MUSTER_DOPPELT'), ak_e(implode(', ', $doppel))))
+        : array(1, sprintf(ak_t('TEST.A_MUSTER_OK'), $anzahl));
 }
 
 /** Der Rechnername, aus dem alle angezeigten Adressen gebildet werden. */
@@ -1696,7 +1890,16 @@ function ak_vorlage($satz = 'status', $nummer = 1, $sn = '')
         // maskiert. Deshalb erst Auszeichnung entfernen und Entitaeten
         // aufloesen - sonst stuende in Loxone Config wortwoertlich
         // 'l&auml;dt' statt 'laedt'.
-        $bedeutung = trim(strip_tags(html_entity_decode(ak_t($info[1]), ENT_QUOTES, 'UTF-8')));
+        // Der Comment wird in Loxone Config zum Kachelnamen - hoechstens 40
+        // Zeichen (Verbesserung b4, 30.09.2026). Gibt es eine Kurzfassung
+        // (AK_KURZ.FELD_OK zu AK_FELD.OK), gilt sie; die Feldtabelle im Reiter
+        // "Einbindung in Loxone" behaelt die ausfuehrliche Beschreibung.
+        $ak_kurz = 'AK_KURZ.' . str_replace('.', '_', substr($info[1], 3));
+        $ak_text = ak_t($ak_kurz);
+        if ($ak_text === $ak_kurz) {
+            $ak_text = ak_t($info[1]);
+        }
+        $bedeutung = trim(strip_tags(html_entity_decode($ak_text, ENT_QUOTES, 'UTF-8')));
         /* Grenzen sind in Loxone eine VALIDIERUNG: ein Wert darueber wird 0
          * (Regeln/07). Deshalb weit genug fuer jeden Wert, den das Plugin
          * senden kann; ALTER kann -1 sein ("noch nie abgerufen"), Leistungen
@@ -2032,9 +2235,12 @@ function ak_t($schluessel)
  * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
  * Zugangsdaten|null).
  */
-function ak_sicherung_lesen($roh)
+function ak_sicherung_lesen($roh, &$namen = null)
 {
     $mangel = array();
+    // X-3 (Verbesserungsbau 30.09.2026): die Namen der beanstandeten
+    // Schluessel, nie ihre Werte.
+    $namen = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
         return array(null, array(ak_t('EINST.SICH_KEIN_JSON')), 0, null);
@@ -2056,6 +2262,7 @@ function ak_sicherung_lesen($roh)
                     ? ak_t('EINST.FEHLER_EMAIL') : '');
             if ($f !== '') {
                 $mangel[] = ak_e($k) . ': ' . $f;
+                $namen[] = $k;
             } else {
                 $zugang[$k] = $w;
                 $anzahl++;
@@ -2064,6 +2271,7 @@ function ak_sicherung_lesen($roh)
         }
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(ak_t('EINST.SICH_FREMD'), ak_e($k));
+            $namen[] = $k;
             continue;
         }
         // Jeder Wert wird geprueft (Befund Oberflaeche 4) - gesammelt, nicht
@@ -2071,6 +2279,7 @@ function ak_sicherung_lesen($roh)
         $f = ak_sicherung_wert($k, $w);
         if ($f !== '') {
             $mangel[] = ak_e($k) . ': ' . $f;
+            $namen[] = $k;
             continue;
         }
         $neu[$k] = $w;
@@ -2086,6 +2295,8 @@ function ak_sicherung_lesen($roh)
         && $neu['hauslast_max'] === $daten['hauslast_max']
         && $neu['hauslast_min'] > $neu['hauslast_max']) {
         $mangel[] = ak_t('EINST.FEHLER_HAUSLAST_TAUSCH');
+        $namen[] = 'hauslast_min';
+        $namen[] = 'hauslast_max';
     }
     /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
      *
@@ -2111,6 +2322,7 @@ function ak_sicherung_lesen($roh)
         }
     }
     if ($fehlend) {
+        $namen = array_merge($namen, $fehlend);
         $mangel[] = sprintf(ak_t('EINST.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
@@ -2196,7 +2408,7 @@ function ak_sicherung_grenzen_gueltig($w)
  * Zugangsdaten; Befund Oberflaeche 3). Die Fassung fragt LoxBerry nach dem
  * Ordnernamen (pluginversion(<ordner>)); ohne LoxBerry steht '?'.
  */
-function ak_sicherung_bauen()
+function ak_sicherung_bauen($warnung = '')
 {
     $p = ak_paths();
     $fassung = '';
@@ -2206,12 +2418,40 @@ function ak_sicherung_bauen()
     $z = ak_json_lesen($p['zugang']);
     $kopf = array('_hinweis' => sprintf(ak_t('EINST.SICH_KOPF'), $p['plugin'],
         $fassung !== '' ? $fassung : '?', date('Y-m-d H:i:s')));
+    // X-3: bestuende die Datei das eigene Zurueckspielen nicht, sagt es der
+    // Kopf - mit den Namen, nie den Werten (ak_rueckspiel_altwerte()).
+    if ((string) $warnung !== '') {
+        $kopf['_warnung'] = (string) $warnung;
+    }
     $zugang = array(
         'email'    => isset($z['email']) ? (string) $z['email'] : '',
         'passwort' => isset($z['passwort']) ? (string) $z['passwort'] : '',
     );
     return json_encode($kopf + ak_config() + $zugang,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+/**
+ * X-3 (Verbesserungsbau 30.09.2026): Welche gespeicherten Werte bestuenden
+ * das eigene Zurueckspielen nicht? Die Sicherung wird gebaut und durch
+ * ak_sicherung_lesen() geschickt - dieselbe Pruefung wie beim Zurueckspielen.
+ * Rueckgabe: Liste der NAMEN, nie der Werte; leer = die Sicherung liesse sich
+ * zurueckspielen (oder liess sich gar nicht bauen - das meldet der Knopf).
+ * Der Name traegt bewusst kein "sicherung": Werkzeuge/sicherung_pruefen.py
+ * nimmt die erste Funktion *_sicherung* mit json_encode fuer die Ausfuhr.
+ */
+function ak_rueckspiel_altwerte()
+{
+    $roh = ak_sicherung_bauen();
+    if (!is_string($roh)) {
+        return array();
+    }
+    $namen = array();
+    list($neu) = ak_sicherung_lesen($roh, $namen);
+    if ($neu !== null) {
+        return array();
+    }
+    return $namen ? array_values(array_unique($namen)) : array('?');
 }
 
 /* ---------------- Einmalmeldung nach dem POST (B11) ----------------
@@ -2222,7 +2462,151 @@ function ak_sicherung_bauen()
  * Einspeisebremse 0.9.28. Passwort und Aktionstoken werden vor dem
  * Schreiben unkenntlich gemacht (Regeln/04, Nachtrag Raumklima 17.09.).
  */
-function ak_einmal_schreiben($meldungen, $fehler, $test, $trocken)
+/* ==================================================================
+ * Eingaben nach einer Beanstandung (Verbesserungsbau 30.09.2026, X-2;
+ * Regeln/04 "Nach einer Beanstandung stehen die eingetippten Werte wieder
+ * im Formular")
+ *
+ * Nur nach einer Beanstandung, nur das eine Formular und nur seine Felder.
+ * Nie Geheimnisse: das Passwort des Anker-Kontos steht in keiner Liste und
+ * reist deshalb nie mit; sein Feld wird hoechstens markiert.
+ * ================================================================== */
+
+/** Die Felder je Formular: array(text => [...], haken => [...], muster => regex|''). */
+function ak_eingabe_felder($form)
+{
+    $felder = array(
+        'settings' => array(
+            'text'   => array('email', 'land', 'intervall', 'takt_details', 'takt_energie',
+                              'takt_prognose', 'endpunkt_limit', 'anfrage_pause', 'anfrage_frist',
+                              'verlauf_tage', 'energie_tage', 'hauslast_min', 'hauslast_max',
+                              'schreibbremse', 'schrittweite', 'rueckfall_min', 'rueckfall_modus',
+                              'wartezeit', 'melden_alter'),
+            'haken'  => array('ohne_details', 'ohne_energie', 'ohne_prognose', 'zaehler_ein',
+                              'steuerung_ein', 'melden_ein'),
+            // Grenzen je Anlage: gmin_<nr>, gmax_<nr>
+            'muster' => '/^g(min|max)_[1-9][0-9]?\z/',
+        ),
+        'mqtt' => array(
+            'text'   => array('mqtt_topic'),
+            'haken'  => array('mqtt_ein', 'mqtt_nur_aenderung'),
+            'muster' => '',
+        ),
+        'test' => array(
+            'text'   => array('test_anlage', 'test_watt', 'test_prozent', 'test_modus', 'test_trocken'),
+            'haken'  => array(),
+            'muster' => '',
+        ),
+    );
+    return isset($felder[$form]) ? $felder[$form] : null;
+}
+
+/** Gehoert $feld zum Formular $form (Text oder Muster)? */
+function ak_eingabe_textfeld($f, $feld)
+{
+    return in_array($feld, $f['text'], true)
+        || ($f['muster'] !== '' && preg_match($f['muster'], $feld) === 1);
+}
+
+/**
+ * Die eingetippten Werte eines Formulars aus $_POST, fuer die Einmalmeldung.
+ * Ein Wert, der kein gueltiges UTF-8 ist oder laenger als 256 Byte, reist
+ * nicht mit (sonst scheiterte json_encode und mit ihm die Umleitung) - das
+ * Feld zeigt dann den gespeicherten Stand.
+ */
+function ak_eingaben_sammeln($form, $beanstandet)
+{
+    $f = ak_eingabe_felder($form);
+    if ($f === null || !$beanstandet) {
+        return null;
+    }
+    $werte = array();
+    foreach ($_POST as $feld => $w) {
+        $feld = (string) $feld;
+        if (ak_eingabe_textfeld($f, $feld) && is_string($w) && strlen($w) <= 256
+            && preg_match('//u', $w) === 1) {
+            $werte[$feld] = $w;
+        }
+    }
+    foreach ($f['haken'] as $feld) {
+        $werte[$feld] = isset($_POST[$feld]) ? '1' : '';
+    }
+    return array('form' => $form, 'werte' => $werte,
+                 'beanstandet' => array_values(array_unique(array_map('strval', $beanstandet))));
+}
+
+/** Die Eingaben aus der Einmalmeldung annehmen (nur bekannte Felder, nur Text). */
+function ak_eingaben_setzen($roh = null)
+{
+    static $ein = array('form' => '', 'werte' => array(), 'beanstandet' => array());
+    if ($roh === null) {
+        return $ein;
+    }
+    if (!is_array($roh) || !isset($roh['form']) || !is_string($roh['form'])
+        || ak_eingabe_felder($roh['form']) === null) {
+        return $ein;
+    }
+    $f = ak_eingabe_felder($roh['form']);
+    $werte = array();
+    if (isset($roh['werte']) && is_array($roh['werte'])) {
+        foreach ($roh['werte'] as $k => $v) {
+            $k = (string) $k;
+            if ((ak_eingabe_textfeld($f, $k) || in_array($k, $f['haken'], true)) && is_string($v)) {
+                $werte[$k] = $v;
+            }
+        }
+    }
+    $bean = array();
+    if (isset($roh['beanstandet']) && is_array($roh['beanstandet'])) {
+        foreach ($roh['beanstandet'] as $b) {
+            if (is_string($b) && ($b === 'passwort' || ak_eingabe_textfeld($f, $b)
+                                  || in_array($b, $f['haken'], true))) {
+                $bean[] = $b;
+            }
+        }
+    }
+    if ($bean) {
+        $ein = array('form' => $roh['form'], 'werte' => $werte, 'beanstandet' => $bean);
+    }
+    return $ein;
+}
+
+/** Welches Formular zeigt gerade Eingaben ('' = keines)? */
+function ak_eingaben_aktiv()
+{
+    $ein = ak_eingaben_setzen();
+    return $ein['form'];
+}
+
+/** Wert eines Textfelds: die Eingabe nach einer Beanstandung, sonst der gespeicherte. */
+function ak_eingabe($form, $feld, $gespeichert)
+{
+    $ein = ak_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld];
+    }
+    return $gespeichert;
+}
+
+/** Haken: nach einer Beanstandung der abgeschickte Stand, sonst der gespeicherte. */
+function ak_eingabe_an($form, $feld, $gespeichert)
+{
+    $ein = ak_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld] === '1';
+    }
+    return (bool) $gespeichert;
+}
+
+/** Das beanstandete Feld wird rot umrandet (Klasse sm-beanstandet). */
+function ak_markierung($feld)
+{
+    $ein = ak_eingaben_setzen();
+    return in_array($feld, $ein['beanstandet'], true)
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
+}
+
+function ak_einmal_schreiben($meldungen, $fehler, $test, $trocken, $eingaben = null)
 {
     $p = ak_paths();
     $geheim = array();
@@ -2244,12 +2628,19 @@ function ak_einmal_schreiben($meldungen, $fehler, $test, $trocken)
             $zeilen[] = array((int) $r[0], $weg($r[1]));
         }
     }
+    // X-2: die Eingaben eines beanstandeten Formulars, ebenso gesaeubert.
+    if (is_array($eingaben) && isset($eingaben['werte']) && is_array($eingaben['werte'])) {
+        $eingaben['werte'] = array_map($weg, $eingaben['werte']);
+    } else {
+        $eingaben = null;
+    }
     return ak_json_schreiben($p['datadir'] . '/einmalmeldung.json', array(
         'zeit'      => time(),
         'meldungen' => array_map($weg, array_values((array) $meldungen)),
         'fehler'    => array_map($weg, array_values((array) $fehler)),
         'test'      => $weg($test),
         'trocken'   => $zeilen,
+        'eingaben'  => $eingaben,
     ), 0600);
 }
 
@@ -2278,5 +2669,6 @@ function ak_einmal_lesen()
         'fehler'    => $liste(isset($d['fehler']) ? $d['fehler'] : null),
         'test'      => isset($d['test']) ? (string) $d['test'] : '',
         'trocken'   => $zeilen,
+        'eingaben'  => (isset($d['eingaben']) && is_array($d['eingaben'])) ? $d['eingaben'] : null,
     );
 }

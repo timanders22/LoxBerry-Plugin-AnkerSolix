@@ -115,6 +115,10 @@ $ak_meldungen = array();   // Erfolgsmeldungen
 $ak_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
 $ak_testausgabe = '';
 $ak_trockenlauf = array();
+// X-2 (Verbesserungsbau 30.09.2026): welches Formular, welche Felder
+// beanstandet wurden - daraus reisen die Eingaben mit der Einmalmeldung.
+$ak_eingaben_form = '';
+$ak_beanstandet = array();
 $ak_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
 // Jeder POST endet mit 303, auch einer mit ungueltigem Formmerkmal (B11).
 $ak_post_roh = $ak_post;
@@ -152,6 +156,13 @@ if (!$ak_post_roh) {
         $ak_fehler = array_merge($ak_fehler, $ak_einmal['fehler']);
         $ak_testausgabe = $ak_einmal['test'];
         $ak_trockenlauf = $ak_einmal['trocken'];
+        // X-2: nach einer Beanstandung die eingetippten Werte zeigen.
+        if (is_array($ak_einmal['eingaben'])) {
+            ak_eingaben_setzen($ak_einmal['eingaben']);
+            if (ak_eingaben_aktiv() !== '') {
+                $ak_meldungen[] = ak_t('EINST.EINGABEN_ZURUECK');
+            }
+        }
     }
 }
 
@@ -206,6 +217,7 @@ if ($ak_post && isset($_POST['speichern'])) {
     $ak_land = strtoupper(trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['land'])));
     if (!preg_match('/^[A-Z]{2}$/', $ak_land)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_LAND');
+        $ak_beanstandet[] = 'land';
     } else {
         $ak_cfg['land'] = $ak_land;
     }
@@ -216,12 +228,14 @@ if ($ak_post && isset($_POST['speichern'])) {
         $ak_wert = isset($_POST[$ak_feld]) ? trim((string) $_POST[$ak_feld]) : '';
         if (!preg_match('/^[0-9]+$/', $ak_wert)) {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_ZAHL'), ak_t('EINST.L_' . strtoupper($ak_feld)));
+            $ak_beanstandet[] = $ak_feld;
             continue;
         }
         $ak_zahl = (int) $ak_wert;
         if ($ak_zahl < $ak_grenzen[0] || $ak_zahl > $ak_grenzen[1]) {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_BEREICH'),
                 ak_t('EINST.L_' . strtoupper($ak_feld)), $ak_grenzen[0], $ak_grenzen[1]);
+            $ak_beanstandet[] = $ak_feld;
             continue;
         }
         $ak_cfg[$ak_feld] = $ak_zahl;
@@ -229,6 +243,8 @@ if ($ak_post && isset($_POST['speichern'])) {
     if (isset($ak_cfg['hauslast_min'], $ak_cfg['hauslast_max'])
         && $ak_cfg['hauslast_min'] > $ak_cfg['hauslast_max']) {
         $ak_fehler[] = ak_t('EINST.FEHLER_HAUSLAST_TAUSCH');
+        $ak_beanstandet[] = 'hauslast_min';
+        $ak_beanstandet[] = 'hauslast_max';
     }
 
     foreach (array('steuerung_ein', 'zaehler_ein', 'melden_ein',
@@ -239,6 +255,7 @@ if ($ak_post && isset($_POST['speichern'])) {
     $ak_rm = isset($_POST['rueckfall_modus']) ? (string) $_POST['rueckfall_modus'] : '';
     if (!array_key_exists($ak_rm, ak_modi())) {
         $ak_fehler[] = ak_t('EINST.FEHLER_RUECKFALL_MODUS');
+        $ak_beanstandet[] = 'rueckfall_modus';
     } else {
         $ak_cfg['rueckfall_modus'] = $ak_rm;
     }
@@ -250,13 +267,16 @@ if ($ak_post && isset($_POST['speichern'])) {
     foreach (ak_anlagen() as $ak_nr => $ak_an) {
         $ak_e1 = isset($_POST['gmin_' . $ak_nr]) ? trim((string) $_POST['gmin_' . $ak_nr]) : '';
         $ak_e2 = isset($_POST['gmax_' . $ak_nr]) ? trim((string) $_POST['gmax_' . $ak_nr]) : '';
-        foreach (array($ak_e1, $ak_e2) as $ak_v) {
+        foreach (array('gmin_' => $ak_e1, 'gmax_' => $ak_e2) as $ak_gname => $ak_v) {
             if ($ak_v !== '' && !preg_match('/^[0-9]{1,4}$/', $ak_v)) {
                 $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_GRENZE_ANLAGE'), $ak_nr);
+                $ak_beanstandet[] = $ak_gname . $ak_nr;
             }
         }
         if ($ak_e1 !== '' && $ak_e2 !== '' && (int) $ak_e1 > (int) $ak_e2) {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_GRENZE_TAUSCH'), $ak_nr);
+            $ak_beanstandet[] = 'gmin_' . $ak_nr;
+            $ak_beanstandet[] = 'gmax_' . $ak_nr;
         }
         if ($ak_e1 !== '' || $ak_e2 !== '') {
             $ak_gr[(string) $ak_nr] = array('min' => $ak_e1, 'max' => $ak_e2);
@@ -279,6 +299,7 @@ if ($ak_post && isset($_POST['speichern'])) {
     $ak_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
     if ($ak_email !== '' && !filter_var($ak_email, FILTER_VALIDATE_EMAIL)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_EMAIL');
+        $ak_beanstandet[] = 'email';
     }
     // Geprueft wird, was NACH dem Speichern stuende - geschrieben wird erst
     // unten: ein leeres Passwortfeld laesst das gespeicherte stehen.
@@ -286,6 +307,7 @@ if ($ak_post && isset($_POST['speichern'])) {
     $ak_pw_laenge = $ak_pw !== '' ? strlen($ak_pw) : (int) $ak_zg['laenge'];
     if ($ak_pw_laenge > 0 && $ak_email === '') {
         $ak_fehler[] = ak_t('EINST.WARN_PW_OHNE_KONTO');
+        $ak_beanstandet[] = 'email';
     }
 
     /* Reihenfolge (Befund Oberflaeche 6): alles pruefen, dann Zugang, dann
@@ -299,6 +321,9 @@ if ($ak_post && isset($_POST['speichern'])) {
         } else {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_SPEICHERN'), $ak_p['config']);
         }
+    }
+    if ($ak_beanstandet) {
+        $ak_eingaben_form = 'settings';
     }
     $ak_tab = 'tab-settings';
 }
@@ -320,6 +345,8 @@ if ($ak_post && isset($_POST['save_mqtt'])) {
         ? trim($_POST['mqtt_topic']) : '';
     if (!ak_topic_gueltig($ak_topic)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_TOPIC');
+        $ak_eingaben_form = 'mqtt';
+        $ak_beanstandet[] = 'mqtt_topic';
     } else {
         $ak_cfg['mqtt_topic'] = $ak_topic;
     }
@@ -371,7 +398,12 @@ if ($ak_post && isset($_POST['trockenlauf'])) {
     $ak_tab = 'tab-test';
 }
 if ($ak_post && isset($_POST['test'])) {
-    list($ak_stand, $ak_text) = ak_test_aktion((string) $_POST['test']);
+    $ak_tfeld = '';
+    list($ak_stand, $ak_text) = ak_test_aktion((string) $_POST['test'], $ak_tfeld);
+    if ($ak_tfeld !== '') {
+        $ak_eingaben_form = 'test';
+        $ak_beanstandet[] = $ak_tfeld;
+    }
     if ($ak_stand === 1) {
         $ak_meldungen[] = ak_e($ak_text);
     } else {
@@ -421,7 +453,12 @@ $ak_rahmen = class_exists('LBWeb', false);
  * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
 if ($ak_post && isset($_POST['ak_sichern'])) {
     // Mit lesbarem _-Kopf und den Zugangsdaten aus zugang.json (B9).
-    $ak_js = ak_sicherung_bauen();
+    // X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das
+    // eigene Zurueckspielen nicht, sagt es der Kopf der Datei - mit den
+    // NAMEN, nie den Werten. Geliefert wird trotzdem, vollstaendig.
+    $ak_altw = ak_rueckspiel_altwerte();
+    $ak_js = ak_sicherung_bauen($ak_altw
+        ? sprintf(ak_t('EINST.SICH_ALTWERT_KOPF'), implode(', ', $ak_altw)) : '');
     if ($ak_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="ankersolix_einstellungen_'
@@ -477,7 +514,8 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
  * Die Downloads (Vorlage, Sicherung) sind oben schon mit exit hinaus.
  * Scheitert das Schreiben der Einmalmeldung, wird wie bisher direkt
  * gerendert - so geht keine Meldung verloren. */
-if ($ak_post_roh && ak_einmal_schreiben($ak_meldungen, $ak_fehler, $ak_testausgabe, $ak_trockenlauf)) {
+if ($ak_post_roh && ak_einmal_schreiben($ak_meldungen, $ak_fehler, $ak_testausgabe, $ak_trockenlauf,
+                                         ak_eingaben_sammeln($ak_eingaben_form, $ak_beanstandet))) {
     header('Location: index.php?form=' . rawurlencode(substr($ak_tab, 4)), true, 303);
     exit;
 }
@@ -567,6 +605,10 @@ if ($ak_rahmen) {
     background-repeat: no-repeat; background-position: right 10px center;
     padding-right: 32px; cursor: pointer; }
 .sm-tbl select { padding-right: 28px; background-position: right 7px center; }
+/* Ergaenzung zur Vorlage (X-2, Verbesserungsbau 30.09.2026): das beanstandete
+   Feld nach der Umleitung rot umrandet. */
+.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
+    border: 2px solid #c62828 !important; background-color: #fff5f5; }
 </style>
 <div class="sm-wrap">
 
@@ -710,54 +752,54 @@ if ($ak_rahmen) {
 <div class="sm-warnung"><?= ak_t('EINST.KONTO_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="email"><?= ak_e(ak_t('EINST.L_EMAIL')) ?></label>
-  <input data-role="none" type="text" id="email" name="email" value="<?= ak_e($ak_zg['email']) ?>" placeholder="name@example.com">
+  <input data-role="none" type="text" id="email" name="email" value="<?= ak_e(ak_eingabe('settings', 'email', $ak_zg['email'])) ?>"<?= ak_markierung('email') ?> placeholder="name@example.com">
   <div class="sm-hilfe"><?= ak_t('EINST.H_EMAIL') ?></div>
 </div>
 <div class="sm-feld">
   <label for="passwort"><?= ak_e(ak_t('EINST.L_PASSWORT')) ?></label>
-  <input data-role="none" type="password" id="passwort" name="passwort" value="" placeholder="<?= $ak_zg['laenge'] > 0 ? ak_e(sprintf(ak_t('EINST.PW_GESETZT'), $ak_zg['laenge'])) : ak_e(ak_t('EINST.PW_LEER')) ?>">
+  <input data-role="none" type="password" id="passwort" name="passwort" value="" placeholder="<?= $ak_zg['laenge'] > 0 ? ak_e(sprintf(ak_t('EINST.PW_GESETZT'), $ak_zg['laenge'])) : ak_e(ak_t('EINST.PW_LEER')) ?>"<?= ak_markierung('passwort') ?>>
   <div class="sm-hilfe"><?= ak_t('EINST.H_PASSWORT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="land"><?= ak_e(ak_t('EINST.L_LAND')) ?></label>
-  <input data-role="none" type="text" id="land" name="land" value="<?= ak_e($ak_cfg['land']) ?>" maxlength="2" placeholder="DE">
+  <input data-role="none" type="text" id="land" name="land" value="<?= ak_e(ak_eingabe('settings', 'land', $ak_cfg['land'])) ?>"<?= ak_markierung('land') ?> maxlength="2" placeholder="DE">
   <div class="sm-hilfe"><?= ak_t('EINST.H_LAND') ?></div>
 </div>
 
 <h2><?= ak_e(ak_t('EINST.H_TAKT')) ?></h2>
 <div class="sm-feld">
   <label for="intervall"><?= ak_e(ak_t('EINST.L_INTERVALL')) ?></label>
-  <input data-role="none" type="number" id="intervall" name="intervall" value="<?= (int) $ak_cfg['intervall'] ?>" min="30" max="900">
+  <input data-role="none" type="number" id="intervall" name="intervall" value="<?= ak_e(ak_eingabe('settings', 'intervall', (int) $ak_cfg['intervall'])) ?>"<?= ak_markierung('intervall') ?> min="30" max="900">
   <div class="sm-hilfe"><?= ak_t('EINST.H_INTERVALL') ?></div>
 </div>
 <div class="sm-feld">
   <label for="takt_details"><?= ak_e(ak_t('EINST.L_TAKT_DETAILS')) ?></label>
-  <input data-role="none" type="number" id="takt_details" name="takt_details" value="<?= (int) $ak_cfg['takt_details'] ?>" min="1" max="240">
+  <input data-role="none" type="number" id="takt_details" name="takt_details" value="<?= ak_e(ak_eingabe('settings', 'takt_details', (int) $ak_cfg['takt_details'])) ?>"<?= ak_markierung('takt_details') ?> min="1" max="240">
   <div class="sm-hilfe"><?= ak_t('EINST.H_TAKT_DETAILS') ?></div>
 </div>
 <div class="sm-feld">
   <label for="takt_energie"><?= ak_e(ak_t('EINST.L_TAKT_ENERGIE')) ?></label>
-  <input data-role="none" type="number" id="takt_energie" name="takt_energie" value="<?= (int) $ak_cfg['takt_energie'] ?>" min="1" max="240">
+  <input data-role="none" type="number" id="takt_energie" name="takt_energie" value="<?= ak_e(ak_eingabe('settings', 'takt_energie', (int) $ak_cfg['takt_energie'])) ?>"<?= ak_markierung('takt_energie') ?> min="1" max="240">
   <div class="sm-hilfe"><?= ak_t('EINST.H_TAKT_ENERGIE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="takt_prognose"><?= ak_e(ak_t('EINST.L_TAKT_PROGNOSE')) ?></label>
-  <input data-role="none" type="number" id="takt_prognose" name="takt_prognose" value="<?= (int) $ak_cfg['takt_prognose'] ?>" min="1" max="1440">
+  <input data-role="none" type="number" id="takt_prognose" name="takt_prognose" value="<?= ak_e(ak_eingabe('settings', 'takt_prognose', (int) $ak_cfg['takt_prognose'])) ?>"<?= ak_markierung('takt_prognose') ?> min="1" max="1440">
   <div class="sm-hilfe"><?= ak_t('EINST.H_TAKT_PROGNOSE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="endpunkt_limit"><?= ak_e(ak_t('EINST.L_ENDPUNKT_LIMIT')) ?></label>
-  <input data-role="none" type="number" id="endpunkt_limit" name="endpunkt_limit" value="<?= (int) $ak_cfg['endpunkt_limit'] ?>" min="1" max="60">
+  <input data-role="none" type="number" id="endpunkt_limit" name="endpunkt_limit" value="<?= ak_e(ak_eingabe('settings', 'endpunkt_limit', (int) $ak_cfg['endpunkt_limit'])) ?>"<?= ak_markierung('endpunkt_limit') ?> min="1" max="60">
   <div class="sm-hilfe"><?= ak_t('EINST.H_ENDPUNKT_LIMIT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="anfrage_pause"><?= ak_e(ak_t('EINST.L_ANFRAGE_PAUSE')) ?></label>
-  <input data-role="none" type="number" id="anfrage_pause" name="anfrage_pause" value="<?= (int) $ak_cfg['anfrage_pause'] ?>" min="0" max="100">
+  <input data-role="none" type="number" id="anfrage_pause" name="anfrage_pause" value="<?= ak_e(ak_eingabe('settings', 'anfrage_pause', (int) $ak_cfg['anfrage_pause'])) ?>"<?= ak_markierung('anfrage_pause') ?> min="0" max="100">
   <div class="sm-hilfe"><?= ak_t('EINST.H_ANFRAGE_PAUSE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="anfrage_frist"><?= ak_e(ak_t('EINST.L_ANFRAGE_FRIST')) ?></label>
-  <input data-role="none" type="number" id="anfrage_frist" name="anfrage_frist" value="<?= (int) $ak_cfg['anfrage_frist'] ?>" min="5" max="60">
+  <input data-role="none" type="number" id="anfrage_frist" name="anfrage_frist" value="<?= ak_e(ak_eingabe('settings', 'anfrage_frist', (int) $ak_cfg['anfrage_frist'])) ?>"<?= ak_markierung('anfrage_frist') ?> min="5" max="60">
   <div class="sm-hilfe"><?= ak_t('EINST.H_ANFRAGE_FRIST') ?></div>
 </div>
 
@@ -765,19 +807,19 @@ if ($ak_rahmen) {
 <div class="sm-hinweis"><?= ak_t('EINST.UMFANG_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="ohne_details" value="1" <?= !empty($ak_cfg['ohne_details']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="ohne_details" value="1" <?= ak_eingabe_an('settings', 'ohne_details', !empty($ak_cfg['ohne_details'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_OHNE_DETAILS')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="ohne_energie" value="1" <?= !empty($ak_cfg['ohne_energie']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="ohne_energie" value="1" <?= ak_eingabe_an('settings', 'ohne_energie', !empty($ak_cfg['ohne_energie'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_OHNE_ENERGIE')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="ohne_prognose" value="1" <?= !empty($ak_cfg['ohne_prognose']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="ohne_prognose" value="1" <?= ak_eingabe_an('settings', 'ohne_prognose', !empty($ak_cfg['ohne_prognose'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_OHNE_PROGNOSE')) ?>
   </label>
   <div class="sm-hilfe"><?= ak_t('EINST.H_OHNE_PROGNOSE') ?></div>
@@ -786,17 +828,17 @@ if ($ak_rahmen) {
 <h2><?= ak_e(ak_t('EINST.H_ABLAGE')) ?></h2>
 <div class="sm-feld">
   <label for="verlauf_tage"><?= ak_e(ak_t('EINST.L_VERLAUF_TAGE')) ?></label>
-  <input data-role="none" type="number" id="verlauf_tage" name="verlauf_tage" value="<?= (int) $ak_cfg['verlauf_tage'] ?>" min="1" max="90">
+  <input data-role="none" type="number" id="verlauf_tage" name="verlauf_tage" value="<?= ak_e(ak_eingabe('settings', 'verlauf_tage', (int) $ak_cfg['verlauf_tage'])) ?>"<?= ak_markierung('verlauf_tage') ?> min="1" max="90">
   <div class="sm-hilfe"><?= ak_t('EINST.H_VERLAUF_TAGE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="energie_tage"><?= ak_e(ak_t('EINST.L_ENERGIE_TAGE')) ?></label>
-  <input data-role="none" type="number" id="energie_tage" name="energie_tage" value="<?= (int) $ak_cfg['energie_tage'] ?>" min="1" max="3650">
+  <input data-role="none" type="number" id="energie_tage" name="energie_tage" value="<?= ak_e(ak_eingabe('settings', 'energie_tage', (int) $ak_cfg['energie_tage'])) ?>"<?= ak_markierung('energie_tage') ?> min="1" max="3650">
   <div class="sm-hilfe"><?= ak_t('EINST.H_ENERGIE_TAGE') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="zaehler_ein" value="1" <?= !empty($ak_cfg['zaehler_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="zaehler_ein" value="1" <?= ak_eingabe_an('settings', 'zaehler_ein', !empty($ak_cfg['zaehler_ein'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_ZAEHLER_EIN')) ?>
   </label>
   <div class="sm-hilfe"><?= ak_t('EINST.H_ZAEHLER_EIN') ?></div>
@@ -806,17 +848,17 @@ if ($ak_rahmen) {
 <div class="sm-warnung"><?= ak_t('EINST.STEUERUNG_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= !empty($ak_cfg['steuerung_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= ak_eingabe_an('settings', 'steuerung_ein', !empty($ak_cfg['steuerung_ein'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_STEUERUNG_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="hauslast_min"><?= ak_e(ak_t('EINST.L_HAUSLAST_MIN')) ?></label>
-  <input data-role="none" type="number" id="hauslast_min" name="hauslast_min" value="<?= (int) $ak_cfg['hauslast_min'] ?>" min="0" max="5000">
+  <input data-role="none" type="number" id="hauslast_min" name="hauslast_min" value="<?= ak_e(ak_eingabe('settings', 'hauslast_min', (int) $ak_cfg['hauslast_min'])) ?>"<?= ak_markierung('hauslast_min') ?> min="0" max="5000">
 </div>
 <div class="sm-feld">
   <label for="hauslast_max"><?= ak_e(ak_t('EINST.L_HAUSLAST_MAX')) ?></label>
-  <input data-role="none" type="number" id="hauslast_max" name="hauslast_max" value="<?= (int) $ak_cfg['hauslast_max'] ?>" min="0" max="5000">
+  <input data-role="none" type="number" id="hauslast_max" name="hauslast_max" value="<?= ak_e(ak_eingabe('settings', 'hauslast_max', (int) $ak_cfg['hauslast_max'])) ?>"<?= ak_markierung('hauslast_max') ?> min="0" max="5000">
   <div class="sm-hilfe"><?= ak_t('EINST.H_HAUSLAST') ?></div>
 </div>
 
@@ -833,9 +875,9 @@ if ($ak_rahmen) {
     list($ak_glo, $ak_ghi) = ak_grenzen($ak_cfg, $ak_nr); ?>
 <tr><td><?= ak_e($ak_nr) ?></td><td><?= ak_e($ak_an['name']) ?></td>
     <td><input data-role="none" type="number" name="gmin_<?= ak_e($ak_nr) ?>" min="0" max="5000" style="width:90px;"
-        value="<?= ak_e(isset($ak_g['min']) ? $ak_g['min'] : '') ?>" placeholder="<?= (int) $ak_cfg['hauslast_min'] ?>"></td>
+        value="<?= ak_e(ak_eingabe('settings', 'gmin_' . $ak_nr, isset($ak_g['min']) ? $ak_g['min'] : '')) ?>"<?= ak_markierung('gmin_' . $ak_nr) ?> placeholder="<?= (int) $ak_cfg['hauslast_min'] ?>"></td>
     <td><input data-role="none" type="number" name="gmax_<?= ak_e($ak_nr) ?>" min="0" max="5000" style="width:90px;"
-        value="<?= ak_e(isset($ak_g['max']) ? $ak_g['max'] : '') ?>" placeholder="<?= (int) $ak_cfg['hauslast_max'] ?>"></td>
+        value="<?= ak_e(ak_eingabe('settings', 'gmax_' . $ak_nr, isset($ak_g['max']) ? $ak_g['max'] : '')) ?>"<?= ak_markierung('gmax_' . $ak_nr) ?> placeholder="<?= (int) $ak_cfg['hauslast_max'] ?>"></td>
     <td><span class="sm-mono"><?= (int) $ak_glo ?>&hellip;<?= (int) $ak_ghi ?> W</span></td></tr>
 <?php } ?>
 </table>
@@ -844,44 +886,44 @@ if ($ak_rahmen) {
 
 <div class="sm-feld">
   <label for="schreibbremse"><?= ak_e(ak_t('EINST.L_SCHREIBBREMSE')) ?></label>
-  <input data-role="none" type="number" id="schreibbremse" name="schreibbremse" value="<?= (int) $ak_cfg['schreibbremse'] ?>" min="0" max="3600">
+  <input data-role="none" type="number" id="schreibbremse" name="schreibbremse" value="<?= ak_e(ak_eingabe('settings', 'schreibbremse', (int) $ak_cfg['schreibbremse'])) ?>"<?= ak_markierung('schreibbremse') ?> min="0" max="3600">
   <div class="sm-hilfe"><?= ak_t('EINST.H_SCHREIBBREMSE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="schrittweite"><?= ak_e(ak_t('EINST.L_SCHRITTWEITE')) ?></label>
-  <input data-role="none" type="number" id="schrittweite" name="schrittweite" value="<?= (int) $ak_cfg['schrittweite'] ?>" min="0" max="1000">
+  <input data-role="none" type="number" id="schrittweite" name="schrittweite" value="<?= ak_e(ak_eingabe('settings', 'schrittweite', (int) $ak_cfg['schrittweite'])) ?>"<?= ak_markierung('schrittweite') ?> min="0" max="1000">
   <div class="sm-hilfe"><?= ak_t('EINST.H_SCHRITTWEITE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="rueckfall_min"><?= ak_e(ak_t('EINST.L_RUECKFALL_MIN')) ?></label>
-  <input data-role="none" type="number" id="rueckfall_min" name="rueckfall_min" value="<?= (int) $ak_cfg['rueckfall_min'] ?>" min="0" max="1440">
+  <input data-role="none" type="number" id="rueckfall_min" name="rueckfall_min" value="<?= ak_e(ak_eingabe('settings', 'rueckfall_min', (int) $ak_cfg['rueckfall_min'])) ?>"<?= ak_markierung('rueckfall_min') ?> min="0" max="1440">
   <div class="sm-hilfe"><?= ak_t('EINST.H_RUECKFALL_MIN') ?></div>
 </div>
 <div class="sm-feld">
   <label for="rueckfall_modus"><?= ak_e(ak_t('EINST.L_RUECKFALL_MODUS')) ?></label>
-  <select data-role="none" id="rueckfall_modus" name="rueckfall_modus">
+  <select data-role="none" id="rueckfall_modus" name="rueckfall_modus"<?= ak_markierung('rueckfall_modus') ?>>
 <?php foreach (array_keys(ak_modi()) as $ak_mo) { ?>
-    <option value="<?= ak_e($ak_mo) ?>"<?= $ak_cfg['rueckfall_modus'] === $ak_mo ? ' selected' : '' ?>><?= ak_e(ak_t('MODUS.' . strtoupper($ak_mo))) ?></option>
+    <option value="<?= ak_e($ak_mo) ?>"<?= ak_eingabe('settings', 'rueckfall_modus', $ak_cfg['rueckfall_modus']) === $ak_mo ? ' selected' : '' ?>><?= ak_e(ak_t('MODUS.' . strtoupper($ak_mo))) ?></option>
 <?php } ?>
   </select>
 </div>
 <div class="sm-feld">
   <label for="wartezeit"><?= ak_e(ak_t('EINST.L_WARTEZEIT')) ?></label>
-  <input data-role="none" type="number" id="wartezeit" name="wartezeit" value="<?= (int) $ak_cfg['wartezeit'] ?>" min="0" max="20">
+  <input data-role="none" type="number" id="wartezeit" name="wartezeit" value="<?= ak_e(ak_eingabe('settings', 'wartezeit', (int) $ak_cfg['wartezeit'])) ?>"<?= ak_markierung('wartezeit') ?> min="0" max="20">
   <div class="sm-hilfe"><?= ak_t('EINST.H_WARTEZEIT') ?></div>
 </div>
 
 <h2><?= ak_e(ak_t('EINST.H_MELDEN')) ?></h2>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="melden_ein" value="1" <?= !empty($ak_cfg['melden_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="melden_ein" value="1" <?= ak_eingabe_an('settings', 'melden_ein', !empty($ak_cfg['melden_ein'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_MELDEN_EIN')) ?>
   </label>
   <div class="sm-hilfe"><?= ak_t('EINST.H_MELDEN_EIN') ?></div>
 </div>
 <div class="sm-feld">
   <label for="melden_alter"><?= ak_e(ak_t('EINST.L_MELDEN_ALTER')) ?></label>
-  <input data-role="none" type="number" id="melden_alter" name="melden_alter" value="<?= (int) $ak_cfg['melden_alter'] ?>" min="60" max="86400">
+  <input data-role="none" type="number" id="melden_alter" name="melden_alter" value="<?= ak_e(ak_eingabe('settings', 'melden_alter', (int) $ak_cfg['melden_alter'])) ?>"<?= ak_markierung('melden_alter') ?> min="60" max="86400">
   <div class="sm-hilfe"><?= ak_t('EINST.H_MELDEN_ALTER') ?></div>
 </div>
 
@@ -928,6 +970,9 @@ if ($ak_rahmen) {
 <h2><?= ak_e(ak_t('EINST.H_SICHERUNG')) ?></h2>
 <div class="sm-hinweis"><?= ak_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= ak_t('EINST.SICH_WARNUNG') ?></div>
+<?php $ak_altwerte = ak_rueckspiel_altwerte(); if ($ak_altwerte) { ?>
+<div class="sm-warnung"><?= sprintf(ak_t('EINST.SICH_ALTWERT'), ak_e(implode(', ', $ak_altwerte))) ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
        exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
@@ -957,18 +1002,18 @@ if ($ak_rahmen) {
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($ak_cfg['mqtt_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= ak_eingabe_an('mqtt', 'mqtt_ein', !empty($ak_cfg['mqtt_ein'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_MQTT_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="mqtt_topic"><?= ak_e(ak_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= ak_e($ak_cfg['mqtt_topic']) ?>" placeholder="ankersolix">
+  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= ak_e(ak_eingabe('mqtt', 'mqtt_topic', $ak_cfg['mqtt_topic'])) ?>"<?= ak_markierung('mqtt_topic') ?> placeholder="ankersolix">
   <div class="sm-hilfe"><?= ak_t('EINST.H_MQTT_TOPIC') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_nur_aenderung" value="1" <?= !empty($ak_cfg['mqtt_nur_aenderung']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="mqtt_nur_aenderung" value="1" <?= ak_eingabe_an('mqtt', 'mqtt_nur_aenderung', !empty($ak_cfg['mqtt_nur_aenderung'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_MQTT_AENDERUNG')) ?>
   </label>
   <div class="sm-hilfe"><?= ak_t('EINST.H_MQTT_AENDERUNG') ?></div>
@@ -1418,23 +1463,23 @@ if (isset($_GET['rohdaten'])) {
 <input data-role="none" type="hidden" name="activetab" value="tab-test">
 <div class="sm-feld">
   <label for="test_anlage"><?= ak_e(ak_t('TEST.L_ANLAGE')) ?></label>
-  <input data-role="none" type="number" id="test_anlage" name="test_anlage" value="1" min="1" max="99">
+  <input data-role="none" type="number" id="test_anlage" name="test_anlage" value="<?= ak_e(ak_eingabe('test', 'test_anlage', '1')) ?>"<?= ak_markierung('test_anlage') ?> min="1" max="99">
 </div>
 <div class="sm-feld">
   <label for="test_watt"><?= ak_e(ak_t('TEST.L_WATT')) ?></label>
-  <input data-role="none" type="number" id="test_watt" name="test_watt" value="<?= (int) $ak_cfg['hauslast_min'] ?>" min="-5000" max="5000">
+  <input data-role="none" type="number" id="test_watt" name="test_watt" value="<?= ak_e(ak_eingabe('test', 'test_watt', (int) $ak_cfg['hauslast_min'])) ?>"<?= ak_markierung('test_watt') ?> min="-5000" max="5000">
   <div class="sm-hilfe"><?= ak_t('TEST.H_WATT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="test_prozent"><?= ak_e(ak_t('TEST.L_PROZENT')) ?></label>
-  <input data-role="none" type="number" id="test_prozent" name="test_prozent" value="10" min="0" max="100">
+  <input data-role="none" type="number" id="test_prozent" name="test_prozent" value="<?= ak_e(ak_eingabe('test', 'test_prozent', '10')) ?>"<?= ak_markierung('test_prozent') ?> min="0" max="100">
   <div class="sm-hilfe"><?= ak_t('TEST.H_PROZENT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="test_modus"><?= ak_e(ak_t('TEST.L_MODUS')) ?></label>
-  <select data-role="none" id="test_modus" name="test_modus">
+  <select data-role="none" id="test_modus" name="test_modus"<?= ak_markierung('test_modus') ?>>
 <?php foreach (array_keys(ak_modi()) as $ak_mo) { ?>
-    <option value="<?= ak_e($ak_mo) ?>"><?= ak_e(ak_t('MODUS.' . strtoupper($ak_mo))) ?></option>
+    <option value="<?= ak_e($ak_mo) ?>"<?= ak_eingabe('test', 'test_modus', '') === $ak_mo ? ' selected' : '' ?>><?= ak_e(ak_t('MODUS.' . strtoupper($ak_mo))) ?></option>
 <?php } ?>
   </select>
 </div>
@@ -1444,9 +1489,9 @@ if (isset($_GET['rohdaten'])) {
 <div class="sm-feld">
   <label for="test_trocken"><?= ak_e(ak_t('TEST.L_TROCKEN')) ?></label>
   <select data-role="none" id="test_trocken" name="test_trocken">
-    <option value="hauslast"><?= ak_e(ak_t('TEST.K_HAUSLAST')) ?></option>
-    <option value="modus"><?= ak_e(ak_t('TEST.K_MODUS')) ?></option>
-    <option value="reserve"><?= ak_e(ak_t('TEST.K_RESERVE')) ?></option>
+<?php foreach (array('hauslast' => 'TEST.K_HAUSLAST', 'modus' => 'TEST.K_MODUS', 'reserve' => 'TEST.K_RESERVE') as $ak_tw => $ak_tk) { ?>
+    <option value="<?= ak_e($ak_tw) ?>"<?= ak_eingabe('test', 'test_trocken', 'hauslast') === $ak_tw ? ' selected' : '' ?>><?= ak_e(ak_t($ak_tk)) ?></option>
+<?php } ?>
   </select>
 </div>
 <div class="sm-legende">

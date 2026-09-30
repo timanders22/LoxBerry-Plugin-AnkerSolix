@@ -344,21 +344,33 @@ function ak_pruefungen()
 /**
  * Fuehrt eine Aktion des Reiters Test aus.
  * Rueckgabe: array(stand, Meldung) - stand wie bei ak_befehl_absetzen.
+ * $feld (X-2): das Eingabefeld, das die Pruefung hier abwies, sonst ''.
  */
-function ak_test_aktion($aktion)
+function ak_test_aktion($aktion, &$feld = null)
 {
+    $feld = '';
     $anlage = isset($_POST['test_anlage']) ? (string) $_POST['test_anlage'] : '1';
     if (!preg_match('/^[0-9]{1,2}$/', $anlage)) {
+        $feld = 'test_anlage';
         return array(0, ak_t('TEST.M_ANLAGE_UNGUELTIG'));
     }
 
     switch ($aktion) {
         case 'abruf':
+            // Dieselbe Bremse wie der Endpunkt (a3 / X-7): hoechstens alle 30 s.
+            $rest = ak_abruf_bremse();
+            if ($rest < 0) {
+                return array(0, ak_t('TEST.M_ABRUF_MERKER'));
+            }
+            if ($rest > 0) {
+                return array(0, sprintf(ak_t('TEST.M_ABRUF_BREMSE'), ak_abruf_abstand(), $rest));
+            }
             return ak_befehl_absetzen(array('aktion' => 'abruf'), 8);
 
         case 'hauslast_test':
             $watt = isset($_POST['test_watt']) ? (string) $_POST['test_watt'] : '';
             if (!preg_match('/^-?[0-9]{1,5}$/', $watt)) {
+                $feld = 'test_watt';
                 return array(0, ak_t('TEST.M_WATT_UNGUELTIG'));
             }
             return ak_befehl_absetzen(array('aktion' => 'hauslast', 'anlage' => $anlage, 'watt' => (int) $watt));
@@ -366,6 +378,7 @@ function ak_test_aktion($aktion)
         case 'modus_test':
             $wert = isset($_POST['test_modus']) ? (string) $_POST['test_modus'] : '';
             if (!preg_match('/^[a-z]{1,20}$/', $wert)) {
+                $feld = 'test_modus';
                 return array(0, ak_t('TEST.M_MODUS_UNGUELTIG'));
             }
             return ak_befehl_absetzen(array('aktion' => 'modus', 'anlage' => $anlage, 'wert' => $wert));
@@ -373,6 +386,7 @@ function ak_test_aktion($aktion)
         case 'reserve_test':
             $prozent = isset($_POST['test_prozent']) ? (string) $_POST['test_prozent'] : '';
             if (!preg_match('/^[0-9]{1,3}$/', $prozent)) {
+                $feld = 'test_prozent';
                 return array(0, ak_t('TEST.M_PROZENT_UNGUELTIG'));
             }
             return ak_befehl_absetzen(array('aktion' => 'reserve', 'anlage' => $anlage, 'prozent' => (int) $prozent));
@@ -380,6 +394,7 @@ function ak_test_aktion($aktion)
         case 'notstrom_test':
             $prozent = isset($_POST['test_prozent']) ? (string) $_POST['test_prozent'] : '';
             if (!preg_match('/^[0-9]{1,3}$/', $prozent)) {
+                $feld = 'test_prozent';
                 return array(0, ak_t('TEST.M_PROZENT_UNGUELTIG'));
             }
             return ak_befehl_absetzen(array('aktion' => 'notstromreserve', 'anlage' => $anlage,
@@ -393,6 +408,7 @@ function ak_test_aktion($aktion)
         case 'grenze_test':
             $watt = isset($_POST['test_watt']) ? (string) $_POST['test_watt'] : '';
             if (!preg_match('/^[0-9]{1,5}$/', $watt)) {
+                $feld = 'test_watt';
                 return array(0, ak_t('TEST.M_WATT_UNGUELTIG'));
             }
             return ak_befehl_absetzen(array('aktion' => 'einspeisegrenze', 'anlage' => $anlage,

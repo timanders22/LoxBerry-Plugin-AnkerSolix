@@ -16,6 +16,33 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.23
+
+Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`). Gemessen an Attrappen
+für Anker-Cloud und Broker unter PHP 7.4, 8.3 und 8.5; nicht am Gerät.
+
+* **Ein Neustart während einer Cloud-Störung behält Anlagen und Geräte.** Bis
+  0.9.22 war die Liste danach leer, und der Endpunkt antwortete
+  `ANLAGE_UNBEKANNT`. Jetzt gibt es die bekannten Werte mit `OK=0` und ihrem Alter.
+  Die Deinstallation räumt alle retained Themen ab (vorher nur eines).
+* **Abrufbremse:** `aktion=abruf` höchstens alle 30 s, sonst HTTP 429 mit
+  `WARTEN_S`. Der Knopf im Reiter Test geht durch dieselbe Bremse. Ist der
+  Merker nicht nutzbar, antwortet der Endpunkt mit 503, statt ungebremst
+  weiterzumachen.
+* Der Endpunkt protokolliert Abweisungen und schaltende Befehle mit Absender,
+  gebremst und mit Zähler, nie mit dem Token.
+* Parameter als Liste (`?token[]=…`, `aktion[]=…`) werden sauber mit 403 bzw.
+  400 abgewiesen. Unter PHP 8.5 mit eingeschalteter Fehleranzeige kam bis 0.9.22
+  HTTP 200 mit PHP-Warnungen; geschaltet wurde auch damals nichts.
+* Die Prüfzeilen „Themenliste gegen Sendecode“ und „Suchmuster eindeutig“
+  messen jetzt wirklich am Code, statt nur Dateien zu vergleichen.
+* Die Kommentare in den Loxone-Vorlagen sind höchstens 40 Zeichen lang, damit
+  die Kachelnamen nicht abgeschnitten werden.
+* Nach einer Beanstandung stehen die eingetippten Werte wieder im Formular, das
+  Feld ist rot umrandet; das Passwort kommt nie zurück. „Einstellungen sichern“
+  warnt gelb, wenn die Sicherung beim Zurückspielen abgewiesen würde.
+
 ## Version 0.9.22 — Zustände bleiben im Broker, OK merkt einen stehenden Dienst
 
 - **Zustände gehen retained hinaus.** Anlagenzahl, Anlagenname, Betriebsart, Sollwerte, Reserve, Einspeiseschalter
