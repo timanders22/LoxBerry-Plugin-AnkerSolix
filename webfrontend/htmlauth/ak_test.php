@@ -348,7 +348,10 @@ function ak_pruefungen()
 function ak_test_befehl($befehl)
 {
     $r = ak_befehl_absetzen($befehl);
-    ak_gleichwert_nachfuehren($befehl, $r[0]);
+    // Innerhalb der Schrittweite ging nichts hinaus (Nr. 21): Merker bleibt.
+    if (empty($r[2])) {
+        ak_gleichwert_nachfuehren($befehl, $r[0]);
+    }
     return $r;
 }
 

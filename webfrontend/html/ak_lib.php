@@ -963,6 +963,9 @@ function ak_trockenlauf($aktion, $anlage, $wert)
     $zeilen[] = array(1, sprintf(ak_t('TROCKEN.GERAET'), $g['name'], $sn, $gen > 0 ? $gen : '?'));
     $zeilen[] = array(-1, sprintf(ak_t('TROCKEN.WEG'), ak_befehlsweg($aktion, $gen)));
 
+    // Innerhalb der Schrittweite ginge nichts hinaus (Nr. 21): dann ist die
+    // Schreibbremse nicht im Weg, und die Bremszeile entfaellt.
+    $schritt_unveraendert = false;
     if ($aktion === 'hauslast') {
         $w = (int) $wert;
         list($lo, $hi) = ak_grenzen($cfg, $nr);
@@ -972,8 +975,9 @@ function ak_trockenlauf($aktion, $anlage, $wert)
         $soll = isset($an['sollwert']) ? $an['sollwert'] : null;
         if ($soll !== null && (int) $cfg['schrittweite'] > 0
             && abs($w - (int) $soll) < (int) $cfg['schrittweite']) {
-            $zeilen[] = array(0, sprintf(ak_t('TROCKEN.SCHRITTWEITE'),
+            $zeilen[] = array(-1, sprintf(ak_t('TROCKEN.SCHRITTWEITE'),
                 abs($w - (int) $soll), (int) $cfg['schrittweite']));
+            $schritt_unveraendert = true;
         }
     } elseif ($aktion === 'modus') {
         $modi = ak_modi_erlaubt($an);
@@ -995,7 +999,7 @@ function ak_trockenlauf($aktion, $anlage, $wert)
     }
 
     $bremse = (int) $cfg['schreibbremse'];
-    if ($bremse > 0) {
+    if ($bremse > 0 && !$schritt_unveraendert) {
         $letzte = ak_letzter_schreibbefehl();
         $rest = $bremse - (time() - $letzte);
         $zeilen[] = ($letzte > 0 && $rest > 0)
@@ -1310,9 +1314,12 @@ function ak_gleichwert_nachfuehren($befehl, $erg)
  * diese eine Funktion ab. Zwei Kopien derselben Logik laufen zwangslaeufig
  * auseinander.
  *
- * Rueckgabe: array(ok, meldung). ok = 1 erledigt, 0 abgelehnt,
+ * Rueckgabe: array(ok, meldung, unveraendert). ok = 1 erledigt, 0 abgelehnt,
  * 2 eingereiht, aber ohne Antwort in der Wartezeit - also Ergebnis unbekannt.
  * Es wird bewusst kein Erfolg gemeldet, den niemand geprueft hat.
+ * unveraendert = 1 nur bei ok = 1, wenn der Dienst nichts gesendet hat, weil
+ * der Wert innerhalb der Schrittweite neben dem gesetzten liegt
+ * (Entscheidung Nr. 21); sonst 0.
  *
  * $cfg: die Konfiguration des Aufrufers. Bis 0.9.24 stand hier
  * ak_config(true): fehlte die Konfiguration oder war sie unlesbar, schrieb
@@ -1336,25 +1343,27 @@ function ak_befehl_absetzen($befehl, $wartezeit = null, $cfg = null)
 
     $ordner = $p['datadir'] . '/befehle';
     if (!is_dir($ordner) && !@mkdir($ordner, 0775, true) && !is_dir($ordner)) {
-        return array(0, sprintf(ak_t('TEST.M_ABLAGE_ORDNER'), $ordner));
+        return array(0, sprintf(ak_t('TEST.M_ABLAGE_ORDNER'), $ordner), 0);
     }
     $kennung = bin2hex(random_bytes(8));
     $datei = $ordner . '/' . $kennung . '.json';
     $tmp = $datei . '.tmp';
     if (@file_put_contents($tmp, json_encode($befehl)) === false || !@rename($tmp, $datei)) {
         @unlink($tmp);
-        return array(0, sprintf(ak_t('TEST.M_ABLAGE_DATEI'), $datei));
+        return array(0, sprintf(ak_t('TEST.M_ABLAGE_DATEI'), $datei), 0);
     }
     $antwort = $p['datadir'] . '/antworten/' . $kennung . '.json';
     for ($i = 0; $i < $wartezeit * 10; $i++) {
         if (is_file($antwort)) {
             $a = ak_json_lesen($antwort);
-            return array((int) (isset($a['ok']) ? $a['ok'] : 0),
-                         (string) (isset($a['meldung']) ? $a['meldung'] : ''));
+            $ok = (int) (isset($a['ok']) ? $a['ok'] : 0);
+            return array($ok,
+                         (string) (isset($a['meldung']) ? $a['meldung'] : ''),
+                         ($ok === 1 && isset($a['unveraendert']) && (int) $a['unveraendert'] === 1) ? 1 : 0);
         }
         usleep(100000);
     }
-    return array(2, sprintf(ak_t('TEST.M_EINGEREIHT'), $wartezeit));
+    return array(2, sprintf(ak_t('TEST.M_EINGEREIHT'), $wartezeit), 0);
 }
 
 /* ---------------- Verlauf ---------------- */

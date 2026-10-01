@@ -1314,11 +1314,15 @@ async def befehl_ausfuehren(api, cfg: dict, b: dict) -> tuple[int, str, dict]:
     if not cfg.get("steuerung_ein"):
         return (0, "Die Steuerung ist ausgeschaltet. Reiter Einstellungen, Haken 'Schreibende Befehle zulassen'.", {})
 
+    # Die Hauslast prueft die Schreibbremse erst NACH der Schrittweite
+    # (Entscheidung Nr. 21): ein Sollwert, der ohnehin nicht gesendet wird,
+    # kostet keine Cloud-Anfrage und ist kein Fehler.
     frei, rest = schreibbremse_frei(cfg)
-    if not frei:
-        return (0, f"Schreibbremse: der letzte Befehl liegt weniger als {cfg['schreibbremse']} s zurueck, "
+    bremse_text = (f"Schreibbremse: der letzte Befehl liegt weniger als {cfg['schreibbremse']} s zurueck, "
                    f"noch {rest} s. Die Anker-Cloud sperrt bei zu vielen Anfragen (429), "
-                   f"und das traefe dann auch die Messwerte.", {})
+                   f"und das traefe dann auch die Messwerte.")
+    if not frei and aktion != "hauslast":
+        return (0, bremse_text, {})
 
     site_id = anlage_waehlen(api, b.get("anlage"))
     if site_id is None:
@@ -1361,12 +1365,17 @@ async def befehl_ausfuehren(api, cfg: dict, b: dict) -> tuple[int, str, dict]:
                        f"fuer Anlage {nummer}. Grenzen im Reiter Einstellungen anpassen, "
                        f"wenn Ihr Geraet mehr kann.", {})
         # Schrittweite: eine Aenderung um wenige Watt kostet eine Cloud-Anfrage
-        # und bewirkt nichts. Auch das wird GEMELDET, nicht verschluckt.
+        # und bewirkt nichts. Gesendet wird nichts, gemeldet wird es trotzdem -
+        # als "unveraendert", nicht als Fehler (Entscheidung Nr. 21, wie
+        # Marstek): bis 0.9.24 war das ok=0, der Endpunkt gab HTTP 500.
         schritt = int(cfg.get("schrittweite") or 0)
         alt = zahl(erstes(api.sites.get(site_id) or {}, "retain_load", "set_load_power"))
         if schritt > 0 and alt is not None and abs(watt - alt) < schritt:
-            return (0, f"Der Sollwert weicht nur um {abs(watt - alt)} W vom bisherigen ab "
-                       f"(Schrittweite {schritt} W). Nicht gesendet.", {"watt": watt, "sn": sn})
+            return (1, f"Der Sollwert {watt} W weicht nur um {abs(watt - alt)} W vom gesetzten ({alt} W) ab "
+                       f"(Schrittweite {schritt} W). Nichts gesendet.",
+                    {"watt": watt, "sn": sn, "unveraendert": 1, "gesetzt": alt})
+        if not frei:
+            return (0, bremse_text, {})
         if generation >= 2:
             erg = await api.set_sb2_home_load(siteId=site_id, deviceSn=sn, preset=float(watt))
         else:

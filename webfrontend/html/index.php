@@ -35,6 +35,11 @@
  * anderer Wert geht sofort hinaus (kein 429). Ohne nutzbaren Merker: 503
  * GRUND=GLEICHWERT_MERKER, nichts eingereiht.
  *
+ * Schrittweite (Entscheidung Nr. 21, 01.10.2026): eine hauslast, die nur
+ * innerhalb der Schrittweite neben dem gesetzten Sollwert liegt, sendet der
+ * Dienst nicht; die Antwort ist HTTP 200, SET;OK=1;AKTION=hauslast;
+ * UNVERAENDERT=1;MELDUNG=.. (ohne SEIT_S). Bis 0.9.24 OK=0 mit HTTP 500.
+ *
  * Der Endpunkt spricht NIE selbst mit der Anker-Cloud. Lesende Aktionen
  * beantwortet er aus dem Zwischenspeicher, schaltende legt er in einer
  * Warteschlange ab, die der Dienst abarbeitet.
@@ -419,12 +424,24 @@ if ($ak_gw_schl !== '') {
 
 // Die ungeheilte Konfiguration von oben (X-1): der Endpunkt schreibt nie
 // die Konfiguration aus der Zweitschrift zurueck, auch nicht beim Einreihen.
-list($ak_erg, $ak_meldung) = ak_befehl_absetzen($ak_befehl, null, $ak_cfg);
+$ak_abgesetzt = ak_befehl_absetzen($ak_befehl, null, $ak_cfg);
+list($ak_erg, $ak_meldung) = $ak_abgesetzt;
+// Innerhalb der Schrittweite (Nr. 21) ging nichts hinaus: der Merker behaelt
+// den zuletzt GESENDETEN Wert (leerer Schluessel - nur Abgelaufenes raeumen),
+// sonst hiesse es spaeter "Derselbe Wert ging vor n s hinaus" fuer einen Wert,
+// der nie hinausging.
+$ak_unveraendert = ($ak_erg === 1 && !empty($ak_abgesetzt[2]));
 if ($ak_gw !== null) {
-    ak_gleichwert_schliessen($ak_gw, ak_gleichwert_nachher($ak_gw_merker, $ak_gw_schl, $ak_gw_wert, $ak_erg === 1));
+    ak_gleichwert_schliessen($ak_gw, ak_gleichwert_nachher($ak_gw_merker,
+        $ak_unveraendert ? '' : $ak_gw_schl, $ak_gw_wert, $ak_erg === 1));
 }
 if ($ak_erg === 0) {
     http_response_code(500);
+}
+if ($ak_unveraendert) {
+    printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;MELDUNG=%s\n", $ak_aktion,
+        str_replace(array("\r", "\n", ';'), ' ', $ak_meldung));
+    exit;
 }
 printf("SET;OK=%d;AKTION=%s;MELDUNG=%s\n", $ak_erg, $ak_aktion,
     str_replace(array("\r", "\n", ';'), ' ', $ak_meldung));

@@ -16,6 +16,21 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.25
+
+Entscheidung 21 (Verbesserungsliste `Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`).
+Gemessen an einer Cloud-Attrappe unter PHP 8.3; nicht am Speicher.
+
+* **Hauslast innerhalb der Schrittweite:** Liegt ein neuer Hauslast-Sollwert nur
+  innerhalb der Schrittweite neben dem gesetzten, antwortet der Endpunkt
+  `SET;OK=1;AKTION=hauslast;UNVERAENDERT=1` mit HTTP 200 statt bisher `OK=0` mit
+  HTTP 500. Gesendet wird weiterhin nichts. Das gilt auch, während die
+  Schreibbremse greift.
+* Ein Wert außerhalb der Schrittweite geht wie bisher hinaus; echte Fehler (Cloud
+  lehnt ab, Grenzen, Schreibbremse bei anderem Wert) bleiben Fehler.
+* Reiter Test und Trockenlauf zeigen diesen Fall als „nichts gesendet“ statt als
+  Ablehnung.
+
 ## Version 0.9.24
 
 Verbesserungen aus dem Durchgang (Verbesserungsliste
@@ -584,6 +599,11 @@ wird innerhalb von 60 s **nicht erneut gesendet**; die Antwort lautet dann
 der Dienst bestätigt hat (`OK=1`). Ein anderer Wert geht sofort hinaus,
 Schreibbremse und Schrittweite des Dienstes gelten weiter. Befehle aus dem
 Reiter *Test* werden nie unterdrückt.
+
+Liegt ein `hauslast`-Wert nur innerhalb der eingestellten **Schrittweite**
+neben dem gesetzten Sollwert, sendet der Dienst ebenfalls nichts. Das ist kein
+Fehler: die Antwort lautet `SET;OK=1;AKTION=hauslast;UNVERAENDERT=1;MELDUNG=…`
+(HTTP 200, ohne `SEIT_S`), auch während die Schreibbremse greift.
 
 Die **Rohdaten der Cloud** mit den echten Feldnamen gibt der Endpunkt bewusst
 **nicht** heraus: sie tragen die Kontokennung, und der Endpunkt liegt im
