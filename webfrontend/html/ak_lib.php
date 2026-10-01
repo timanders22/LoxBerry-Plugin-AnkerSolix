@@ -1137,6 +1137,173 @@ function ak_abruf_bremse()
     return 0;
 }
 
+/* ---------------- Gleichwert-Unterdrueckung (X-7) ----------------
+ *
+ * B-Nachzug 01.10.2026, Entscheidungen Nr. 16 (AnkerSolix) und Nr. 19;
+ * Vorbild EVCC 0.9.37 (webfrontend/html/index.php, Befehlsbremse), Marstek
+ * 1.1.19 und Heimkino (vb_hk2_bau). Ein Sollwert-Befehl des Endpunkts mit
+ * DEMSELBEN Wert geht innerhalb von 60 s nicht erneut in die Warteschlange
+ * (HTTP 200, UNVERAENDERT=1). Bis 0.9.24 reihte ein Loxone-Ausgang, der
+ * denselben Wert wiederholt, jeden Aufruf ein; der Dienst schickte ihn erneut
+ * an die Cloud, oder die Schreibbremse wies ihn mit OK=0 (HTTP 500) ab.
+ * Ein anderer Wert geht sofort hinaus - ein zusaetzliches 429 gibt es nicht
+ * (Nr. 16); Schreibbremse und Schrittweite des Dienstes bleiben. */
+
+/** Fenster der Gleichwert-Unterdrueckung in Sekunden. */
+function ak_gleichwert_fenster()
+{
+    return 60;
+}
+
+/**
+ * Merkerschluessel eines Befehls, '' fuer alle nicht betroffenen.
+ *
+ * Betroffen sind die Sollwert-Befehle (Nr. 19: Modus, Grenzen, Ein/Aus):
+ * hauslast, modus, reserve, einspeisung, einspeisegrenze, notstromreserve,
+ * pvlimit. Nicht abruf (Ereignis mit eigener 30-s-Bremse). Der Schluessel
+ * traegt Anlage (als Zahl, "01" = "1" wie im Dienst) und Seriennummer: ein
+ * Befehl an ein anderes Geraet ist ein anderer Sollwert.
+ */
+function ak_gleichwert_schluessel($befehl)
+{
+    $aktion = (is_array($befehl) && isset($befehl['aktion'])) ? (string) $befehl['aktion'] : '';
+    if (!in_array($aktion, array('hauslast', 'modus', 'reserve', 'einspeisung',
+                                 'einspeisegrenze', 'notstromreserve', 'pvlimit'), true)) {
+        return '';
+    }
+    return $aktion . '|' . (isset($befehl['anlage']) ? (int) $befehl['anlage'] : 1)
+         . '|' . (isset($befehl['sn']) ? (string) $befehl['sn'] : '');
+}
+
+/** Der verglichene Wert eines Befehls: watt, prozent oder wert. */
+function ak_gleichwert_wert($befehl)
+{
+    foreach (array('watt', 'prozent', 'wert') as $k) {
+        if (is_array($befehl) && isset($befehl[$k])) {
+            return $k . '=' . (string) $befehl[$k];
+        }
+    }
+    return '';
+}
+
+/**
+ * Den Merker oeffnen und sperren. Rueckgabe: Dateizeiger oder false.
+ *
+ * Die Sperre bleibt waehrend des Einreihens und Wartens gehalten (wie EVCC):
+ * zwei gleichzeitige gleiche Aufrufe reihen so nur einmal ein. "e"
+ * (close-on-exec) wie im Heimkino-Bau, falls je ein Kindprozess entsteht.
+ * Angelegt wird nur der Merker selbst, kein Ordner: ohne Datenordner -
+ * false, und der Endpunkt faellt geschlossen aus (503).
+ */
+function ak_gleichwert_oeffnen()
+{
+    $p = ak_paths();
+    $f = $p['datadir'] . '/befehl_gleichwert.json';
+    $fh = is_dir($p['datadir']) ? @fopen($f, 'c+e') : false;
+    if ($fh !== false && !@flock($fh, LOCK_EX)) {
+        @fclose($fh);
+        $fh = false;
+    }
+    if ($fh === false) {
+        ak_log_wenn_neu('gleichwert', 'Der Merker der Gleichwert-Unterdrueckung (' . $f . ') laesst sich '
+            . 'nicht oeffnen - schaltende Befehle werden mit 503 abgewiesen, bis das behoben ist. '
+            . 'Pruefen: Datenordner, Platz und Eigentuemer (loxberry).');
+    }
+    return $fh;
+}
+
+/** Den gesperrten Merker lesen; Unlesbares gilt als leer (dann geht der
+ * Befehl hinaus - im Zweifel senden, nie still verschlucken). */
+function ak_gleichwert_lesen($fh)
+{
+    @rewind($fh);
+    $d = json_decode((string) stream_get_contents($fh), true);
+    return is_array($d) ? $d : array();
+}
+
+/** Sekunden seit DEMSELBEN Wert, -1 wenn ein anderer Wert gemerkt ist oder
+ * der gemerkte nicht im Fenster liegt (eine zurueckgestellte Uhr haelt
+ * nichts zurueck). */
+function ak_gleichwert_seit($merker, $schluessel, $wert)
+{
+    if ($schluessel === '' || !isset($merker[$schluessel]) || !is_array($merker[$schluessel])) {
+        return -1;
+    }
+    $e = $merker[$schluessel];
+    if (!isset($e['w'], $e['t']) || (string) $e['w'] !== (string) $wert) {
+        return -1;
+    }
+    $seit = time() - (int) $e['t'];
+    return ($seit >= 0 && $seit < ak_gleichwert_fenster()) ? $seit : -1;
+}
+
+/**
+ * Der Merker nach einem Befehl: bestaetigt (ok=1) - der eigene Wert mit
+ * Zeit; abgelehnt oder ohne Antwort (0/2) - der eigene Eintrag faellt weg,
+ * ein Wiederholen geht dann hinaus. Eintraege ausserhalb des Fensters
+ * werden nicht mitgeschleppt.
+ */
+function ak_gleichwert_nachher($merker, $schluessel, $wert, $gelungen)
+{
+    $jetzt = time();
+    foreach ($merker as $k => $e) {
+        $alter = (is_array($e) && isset($e['t'])) ? $jetzt - (int) $e['t'] : -1;
+        if ($alter < 0 || $alter >= ak_gleichwert_fenster()) {
+            unset($merker[$k]);
+        }
+    }
+    if ($schluessel !== '') {
+        if ($gelungen) {
+            $merker[$schluessel] = array('w' => (string) $wert, 't' => $jetzt);
+        } else {
+            unset($merker[$schluessel]);
+        }
+    }
+    return $merker;
+}
+
+/** Den Merker schreiben (ausser bei null), entsperren und schliessen.
+ * Erfolg nur bei vollstaendig geschriebenem Inhalt (Fehlerklasse 1). */
+function ak_gleichwert_schliessen($fh, $merker)
+{
+    $ok = true;
+    if ($merker !== null) {
+        $roh = (string) json_encode($merker);
+        $ok = @ftruncate($fh, 0) && @rewind($fh) && @fwrite($fh, $roh) === strlen($roh) && @fflush($fh);
+        if (!$ok) {
+            ak_log_wenn_neu('gleichwert_schreiben', 'Der Merker der Gleichwert-Unterdrueckung liess sich '
+                . 'nicht schreiben - ein gleicher Befehl geht dann erneut hinaus. '
+                . 'Pruefen: Platz und Eigentuemer (loxberry).');
+        }
+    }
+    @flock($fh, LOCK_UN);
+    @fclose($fh);
+    return $ok;
+}
+
+/**
+ * Den Merker nach einem Befehl aus dem Reiter Test nachfuehren.
+ *
+ * Der Reiter Test unterdrueckt nichts (ein Mensch drueckt den Knopf
+ * bewusst). Er fuehrt den Merker aber nach: sonst wuerde ein Loxone-Befehl,
+ * der kurz zuvor denselben Wert setzte, nach einem anderen Wert aus dem
+ * Reiter Test noch 60 s lang unterdrueckt. Laesst sich der Merker nicht
+ * oeffnen, bleibt es still - der Endpunkt faellt dann ohnehin geschlossen aus.
+ */
+function ak_gleichwert_nachfuehren($befehl, $erg)
+{
+    $schl = ak_gleichwert_schluessel($befehl);
+    if ($schl === '') {
+        return false;
+    }
+    $fh = ak_gleichwert_oeffnen();
+    if ($fh === false) {
+        return false;
+    }
+    return ak_gleichwert_schliessen($fh, ak_gleichwert_nachher(ak_gleichwert_lesen($fh), $schl,
+        ak_gleichwert_wert($befehl), (int) $erg === 1));
+}
+
 /* ---------------- Befehlswarteschlange ----------------
  *
  * Sowohl der Miniserver-Endpunkt als auch der Reiter Test setzen Befehle ueber
@@ -1146,11 +1313,22 @@ function ak_abruf_bremse()
  * Rueckgabe: array(ok, meldung). ok = 1 erledigt, 0 abgelehnt,
  * 2 eingereiht, aber ohne Antwort in der Wartezeit - also Ergebnis unbekannt.
  * Es wird bewusst kein Erfolg gemeldet, den niemand geprueft hat.
+ *
+ * $cfg: die Konfiguration des Aufrufers. Bis 0.9.24 stand hier
+ * ak_config(true): fehlte die Konfiguration oder war sie unlesbar, schrieb
+ * schon ein schaltender Aufruf des UNANGEMELDETEN Endpunkts sie aus der
+ * Zweitschrift zurueck (samt .kaputt-Abschrift und Protokollzeile) - obwohl
+ * der Endpunkt ausdruecklich nichts anlegt (ak_config(false), X-1 im
+ * B-Nachzug 01.10.2026). Jetzt wird nur gelesen; der Endpunkt reicht seine
+ * ungeheilte Konfiguration durch, die Oberflaeche hat beim Seitenaufbau
+ * ohnehin schon geheilt. Gebraucht wird hier nur die Wartezeit.
  */
-function ak_befehl_absetzen($befehl, $wartezeit = null)
+function ak_befehl_absetzen($befehl, $wartezeit = null, $cfg = null)
 {
     $p = ak_paths();
-    $cfg = ak_config(true);
+    if (!is_array($cfg)) {
+        $cfg = ak_config(false);
+    }
     if ($wartezeit === null) {
         $wartezeit = (int) $cfg['wartezeit'];
     }
@@ -1938,7 +2116,7 @@ function ak_vorlage($satz = 'status', $nummer = 1, $sn = '')
         'address' => $adresse,
         'polling' => $takt,
         'comment' => 'Erzeugt vom LoxBerry-Plugin Anker SOLIX (' . date('d.m.Y') . '). '
-                   . 'Loxone Config legt beim Import neu an und ueberschreibt nichts - '
+                   . 'Loxone Config legt beim Import neu an und überschreibt nichts - '
                    . 'zweimal eingelesen ergibt doppelte Bausteine.',
     ), $cmds));
 }

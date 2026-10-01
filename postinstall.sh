@@ -153,6 +153,9 @@ ak_inhalt() {   # $1 Datei, $2 Art: konf | zugang
 # schreibender Befehle aus liegengebliebenen Zweitschriften zurueck. Ohne
 # Marke werden sie nach <name>.alt verschoben - auch damit die Selbstheilung
 # der Oberflaeche (ak_config) sie nicht mehr findet - und einmal gemeldet.
+# Seit dem B-Nachzug (01.10.2026, X-1) legt sie schon preinstall.sh beiseite,
+# BEVOR Oberflaeche und Cron-Datei da sind; dieser Schritt bleibt als
+# Rueckfall (etwa wenn preinstall.sh eine Datei nicht verschieben konnte).
 BEISEITE=""
 for f in ankersolix.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"

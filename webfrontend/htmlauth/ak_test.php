@@ -342,6 +342,17 @@ function ak_pruefungen()
 }
 
 /**
+ * Einen Sollwert-Befehl aus dem Reiter Test absetzen und den Merker der
+ * Gleichwert-Unterdrueckung nachfuehren (X-7). Unterdrueckt wird hier nichts.
+ */
+function ak_test_befehl($befehl)
+{
+    $r = ak_befehl_absetzen($befehl);
+    ak_gleichwert_nachfuehren($befehl, $r[0]);
+    return $r;
+}
+
+/**
  * Fuehrt eine Aktion des Reiters Test aus.
  * Rueckgabe: array(stand, Meldung) - stand wie bei ak_befehl_absetzen.
  * $feld (X-2): das Eingabefeld, das die Pruefung hier abwies, sonst ''.
@@ -373,7 +384,7 @@ function ak_test_aktion($aktion, &$feld = null)
                 $feld = 'test_watt';
                 return array(0, ak_t('TEST.M_WATT_UNGUELTIG'));
             }
-            return ak_befehl_absetzen(array('aktion' => 'hauslast', 'anlage' => $anlage, 'watt' => (int) $watt));
+            return ak_test_befehl(array('aktion' => 'hauslast', 'anlage' => $anlage, 'watt' => (int) $watt));
 
         case 'modus_test':
             $wert = isset($_POST['test_modus']) ? (string) $_POST['test_modus'] : '';
@@ -381,7 +392,7 @@ function ak_test_aktion($aktion, &$feld = null)
                 $feld = 'test_modus';
                 return array(0, ak_t('TEST.M_MODUS_UNGUELTIG'));
             }
-            return ak_befehl_absetzen(array('aktion' => 'modus', 'anlage' => $anlage, 'wert' => $wert));
+            return ak_test_befehl(array('aktion' => 'modus', 'anlage' => $anlage, 'wert' => $wert));
 
         case 'reserve_test':
             $prozent = isset($_POST['test_prozent']) ? (string) $_POST['test_prozent'] : '';
@@ -389,7 +400,7 @@ function ak_test_aktion($aktion, &$feld = null)
                 $feld = 'test_prozent';
                 return array(0, ak_t('TEST.M_PROZENT_UNGUELTIG'));
             }
-            return ak_befehl_absetzen(array('aktion' => 'reserve', 'anlage' => $anlage, 'prozent' => (int) $prozent));
+            return ak_test_befehl(array('aktion' => 'reserve', 'anlage' => $anlage, 'prozent' => (int) $prozent));
 
         case 'notstrom_test':
             $prozent = isset($_POST['test_prozent']) ? (string) $_POST['test_prozent'] : '';
@@ -397,12 +408,12 @@ function ak_test_aktion($aktion, &$feld = null)
                 $feld = 'test_prozent';
                 return array(0, ak_t('TEST.M_PROZENT_UNGUELTIG'));
             }
-            return ak_befehl_absetzen(array('aktion' => 'notstromreserve', 'anlage' => $anlage,
+            return ak_test_befehl(array('aktion' => 'notstromreserve', 'anlage' => $anlage,
                                             'prozent' => (int) $prozent));
 
         case 'einspeisung_aus':
         case 'einspeisung_ein':
-            return ak_befehl_absetzen(array('aktion' => 'einspeisung', 'anlage' => $anlage,
+            return ak_test_befehl(array('aktion' => 'einspeisung', 'anlage' => $anlage,
                                             'wert' => $aktion === 'einspeisung_ein' ? 'ein' : 'aus'));
 
         case 'grenze_test':
@@ -411,7 +422,7 @@ function ak_test_aktion($aktion, &$feld = null)
                 $feld = 'test_watt';
                 return array(0, ak_t('TEST.M_WATT_UNGUELTIG'));
             }
-            return ak_befehl_absetzen(array('aktion' => 'einspeisegrenze', 'anlage' => $anlage,
+            return ak_test_befehl(array('aktion' => 'einspeisegrenze', 'anlage' => $anlage,
                                             'watt' => (int) $watt));
 
         default:

@@ -214,7 +214,11 @@ if ($ak_post && isset($_POST['vorlage'])) {
 if ($ak_post && isset($_POST['speichern'])) {
     $ak_cfg = ak_config(true);
 
-    $ak_land = strtoupper(trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['land'])));
+    /* Nr. 19 (B-Nachzug 01.10.2026): nichts still entfernen. Bis 0.9.24
+     * wurden Steuer- und Anfuehrungszeichen herausgeschnitten und das
+     * Ergebnis gespeichert (D"E -> DE). Jetzt nur Leerraum am Rand und
+     * Grossschreibung (Darstellung); ein Feld statt Text ist kein Land. */
+    $ak_land = (isset($_POST['land']) && is_string($_POST['land'])) ? strtoupper(trim($_POST['land'])) : '';
     if (!preg_match('/^[A-Z]{2}$/', $ak_land)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_LAND');
         $ak_beanstandet[] = 'land';
@@ -295,9 +299,24 @@ if ($ak_post && isset($_POST['speichern'])) {
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
      * Passwortfeld loescht nichts - sonst stuende irgendwann ein leeres
      * Passwort in der Datei, ohne dass es jemand merkt. */
-    $ak_email = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['email']));
-    $ak_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
-    if ($ak_email !== '' && !filter_var($ak_email, FILTER_VALIDATE_EMAIL)) {
+    /* Nr. 19 (B-Nachzug 01.10.2026): bis 0.9.24 schnitt hier ein
+     * preg_replace Steuer- und Anfuehrungszeichen heraus und speicherte das
+     * Ergebnis - aus o'brien@example.org wurde still obrien@example.org,
+     * also ein anderes Konto. Jetzt nur Leerraum am Rand; geprueft wird wie
+     * beim Zurueckspielen (filter_var). Ein Feld statt Text wird beanstandet
+     * und nie zu "Array" oder zu einer leeren (geloeschten) Adresse. */
+    $ak_email_roh = isset($_POST['email']) ? $_POST['email'] : '';
+    $ak_email = is_string($ak_email_roh) ? trim($ak_email_roh) : '';
+    /* Ebenso das Passwort: bis 0.9.24 wurde passwort[]=x per (string) zum
+     * Passwort "Array" und gespeichert. Ein Feld statt Text wird beanstandet;
+     * leer bleibt "unveraendert" (Geheimnisfeld). */
+    if (isset($_POST['passwort']) && !is_string($_POST['passwort'])) {
+        $ak_fehler[] = ak_t('EINST.L_PASSWORT') . ': ' . ak_t('EINST.SICH_TEXT');
+        $ak_beanstandet[] = 'passwort';
+    }
+    $ak_pw = (isset($_POST['passwort']) && is_string($_POST['passwort'])) ? $_POST['passwort'] : '';
+    if (!is_string($ak_email_roh)
+        || ($ak_email !== '' && !filter_var($ak_email, FILTER_VALIDATE_EMAIL))) {
         $ak_fehler[] = ak_t('EINST.FEHLER_EMAIL');
         $ak_beanstandet[] = 'email';
     }

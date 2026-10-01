@@ -16,6 +16,24 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.24
+
+Verbesserungen aus dem Durchgang (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidungen 16 und 19).
+Gemessen an einer Anker-Cloud-Attrappe unter PHP 7.4, 8.3 und 8.5; nicht am Speicher.
+
+* **Neuinstallation:** Alte Zweitschriften werden schon vor dem Kopieren der
+  Oberfläche beiseitegelegt (`preinstall.sh`, `.alt`). Bisher galt das alte
+  Aktionstoken nach einer Neuinstallation weiter.
+* Der Endpunkt schreibt die Konfiguration nie mehr aus der Zweitschrift zurück.
+* **Befehlsbremse:** Derselbe Sollwert (modus, reserve, einspeisung,
+  einspeisegrenze, notstromreserve, pvlimit, hauslast) je Anlage innerhalb von
+  60 s wird nicht erneut gesendet; die Antwort ist `UNVERAENDERT=1` mit HTTP 200
+  statt bisher einer Wiederholung oder HTTP 500. Die Schreibbremse bleibt.
+* **Nach einer Beanstandung wird nichts gespeichert:** Benutzername und Land werden
+  nicht mehr still gekürzt, ein Passwort als Liste wird beanstandet.
+* Vorlagenkopf mit Umlaut („überschreibt“).
+
 ## Version 0.9.23
 
 Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
@@ -558,6 +576,14 @@ mit ausgewertet.
 Schaltende Aufrufe antworten mit `SET;OK=…`: `1` erledigt, `0` abgelehnt (mit
 Grund), `2` eingereiht, aber innerhalb der Wartezeit ohne Antwort — also
 Ergebnis unbekannt. Ein Erfolg, den niemand geprüft hat, wird nie gemeldet.
+
+Derselbe Sollwert (`hauslast`, `modus`, `reserve`, `einspeisung`,
+`einspeisegrenze`, `notstromreserve`, `pvlimit`, je Anlage und Seriennummer)
+wird innerhalb von 60 s **nicht erneut gesendet**; die Antwort lautet dann
+`SET;OK=1;AKTION=…;UNVERAENDERT=1;SEIT_S=…`. Gemerkt wird nur ein Befehl, den
+der Dienst bestätigt hat (`OK=1`). Ein anderer Wert geht sofort hinaus,
+Schreibbremse und Schrittweite des Dienstes gelten weiter. Befehle aus dem
+Reiter *Test* werden nie unterdrückt.
 
 Die **Rohdaten der Cloud** mit den echten Feldnamen gibt der Endpunkt bewusst
 **nicht** heraus: sie tragen die Kontokennung, und der Endpunkt liegt im

@@ -28,6 +28,13 @@
  *   abruf                          sofortiger Abruf statt Warten auf den Takt,
  *                                  hoechstens alle 30 s (sonst 429 mit WARTEN_S)
  *
+ * Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026): hauslast, modus,
+ * reserve, einspeisung, einspeisegrenze, notstromreserve und pvlimit mit
+ * DEMSELBEN Wert (je Anlage und sn) innerhalb von 60 s werden nicht erneut
+ * eingereiht: HTTP 200, SET;OK=1;AKTION=..;UNVERAENDERT=1;SEIT_S=n. Ein
+ * anderer Wert geht sofort hinaus (kein 429). Ohne nutzbaren Merker: 503
+ * GRUND=GLEICHWERT_MERKER, nichts eingereiht.
+ *
  * Der Endpunkt spricht NIE selbst mit der Anker-Cloud. Lesende Aktionen
  * beantwortet er aus dem Zwischenspeicher, schaltende legt er in einer
  * Warteschlange ab, die der Dienst abarbeitet.
@@ -384,7 +391,38 @@ if ($ak_aktion === 'pvlimit' && $ak_sn === '') {
     exit;
 }
 
-list($ak_erg, $ak_meldung) = ak_befehl_absetzen($ak_befehl);
+/* Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026, Entscheidungen
+ * Nr. 16 und 19; Vorbild EVCC 0.9.37). Erst sind Aktion und Wert geprueft
+ * (oben), dann kommt die Unterdrueckung, dann das Einreihen. Der Merker bleibt
+ * bis nach der Antwort des Dienstes gesperrt; laesst er sich nicht oeffnen,
+ * faellt es geschlossen aus (503) - eingereiht wird dann nichts. */
+$ak_gw_schl = ak_gleichwert_schluessel($ak_befehl);
+$ak_gw = null;
+$ak_gw_merker = array();
+$ak_gw_wert = ak_gleichwert_wert($ak_befehl);
+if ($ak_gw_schl !== '') {
+    $ak_gw = ak_gleichwert_oeffnen();
+    if ($ak_gw === false) {
+        http_response_code(503);
+        echo 'SET;OK=0;AKTION=' . $ak_aktion . ";GRUND=GLEICHWERT_MERKER\n";
+        exit;
+    }
+    $ak_gw_merker = ak_gleichwert_lesen($ak_gw);
+    $ak_seit = ak_gleichwert_seit($ak_gw_merker, $ak_gw_schl, $ak_gw_wert);
+    if ($ak_seit >= 0) {
+        ak_gleichwert_schliessen($ak_gw, null);
+        printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=Derselbe Wert ging vor %d s hinaus - nichts gesendet.\n",
+            $ak_aktion, $ak_seit, $ak_seit);
+        exit;
+    }
+}
+
+// Die ungeheilte Konfiguration von oben (X-1): der Endpunkt schreibt nie
+// die Konfiguration aus der Zweitschrift zurueck, auch nicht beim Einreihen.
+list($ak_erg, $ak_meldung) = ak_befehl_absetzen($ak_befehl, null, $ak_cfg);
+if ($ak_gw !== null) {
+    ak_gleichwert_schliessen($ak_gw, ak_gleichwert_nachher($ak_gw_merker, $ak_gw_schl, $ak_gw_wert, $ak_erg === 1));
+}
 if ($ak_erg === 0) {
     http_response_code(500);
 }

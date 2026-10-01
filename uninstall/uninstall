@@ -194,7 +194,8 @@ fi
 
 # ---------- 3. Sicherungen und Daten abraeumen ----------
 ANZAHL=0
-# Dazu die .alt, die postinstall.sh bei einer Neuinstallation beiseitelegt
+# Dazu die .alt, die preinstall.sh (als Rueckfall postinstall.sh) bei einer
+# Neuinstallation beiseitelegt
 # (Befund Installer 1) - auch sie tragen das Klartextpasswort.
 for f in ankersolix.json zugang.json; do
     for BK in "$BASE/config/plugins/$PFOLDER.backup.$f" "$BASE/config/plugins/$PFOLDER.backup.$f.alt"; do
