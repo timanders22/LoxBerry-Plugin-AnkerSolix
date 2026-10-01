@@ -16,6 +16,21 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.26
+
+Entscheidung 22 (Verbesserungsliste `Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`).
+Gemessen an einer Cloud-Attrappe unter PHP 8.3; nicht am Speicher.
+
+* **Rückfall berichtigt:** Der Rückfall (ab Werk aus) misst jetzt die Zeit seit
+  dem letzten gültigen Sollwert von Loxone. Auch ein Aufruf mit `UNVERAENDERT=1`
+  (gleicher Wert innerhalb 60 s oder innerhalb der Schrittweite) zählt. Bisher
+  griff der Rückfall bei gleichbleibendem Sollwert, obwohl Loxone lebte – etwa
+  mit den Takt-Bausteinen der Loxone-Vorlage.
+* Abgewiesene Aufrufe, Reiter Test und Trockenlauf ohne Senden zählen nicht;
+  gesendet wird nichts zusätzlich.
+* Ist der Merker unbrauchbar, gilt das bisherige Verhalten: der Rückfall greift
+  eher zu früh als nie. Der Reiter Test zeigt das Alter des Merkers.
+
 ## Version 0.9.25
 
 Entscheidung 21 (Verbesserungsliste `Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`).
@@ -604,6 +619,17 @@ Liegt ein `hauslast`-Wert nur innerhalb der eingestellten **Schrittweite**
 neben dem gesetzten Sollwert, sendet der Dienst ebenfalls nichts. Das ist kein
 Fehler: die Antwort lautet `SET;OK=1;AKTION=hauslast;UNVERAENDERT=1;MELDUNG=…`
 (HTTP 200, ohne `SEIT_S`), auch während die Schreibbremse greift.
+
+Der **Rückfall** (Reiter *Einstellungen*, ab Werk aus) misst die Zeit seit dem
+letzten gültigen Sollwert von Loxone, nicht nur seit dem letzten gesendeten:
+auch eine Antwort mit `UNVERAENDERT=1` (gleicher Wert innerhalb 60 s oder
+innerhalb der Schrittweite) zählt. Abgewiesene Aufrufe (Token, Parameter,
+Grenzen, Schreibbremse, Steuerung aus) zählen nicht, ebenso wenig Reiter *Test*
+und Trockenlauf, solange sie nichts senden; ein gesendeter Befehl setzt den
+Rückfall wie bisher zurück. Gesendet wird dadurch nichts zusätzlich. Lässt sich
+der Merker `sollwert_empfangen` nicht lesen oder schreiben, misst der Rückfall
+wie bisher nur am letzten gesendeten Befehl – er greift dann eher zu früh als
+nie. Die Zeile *Rückfall* im Reiter *Test* nennt das Alter des Merkers.
 
 Die **Rohdaten der Cloud** mit den echten Feldnamen gibt der Endpunkt bewusst
 **nicht** heraus: sie tragen die Kontokennung, und der Endpunkt liegt im

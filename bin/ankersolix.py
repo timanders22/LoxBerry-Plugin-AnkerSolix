@@ -142,6 +142,13 @@ DATEI_CACHE = PDATA / "cache.json"
 DATEI_LOXONE = PDATA / "loxone.json"
 DATEI_ZUSTAND = PDATA / "zustand.json"
 DATEI_LETZTER_SCHREIB = PDATA / "letzter_schreibbefehl"
+# Wann kam zuletzt ein gueltiger Sollwert von Loxone (Entscheidung Nr. 22)?
+# Gemeinsam mit dem Endpunkt (ak_sollwert_empfangen_vermerken() in ak_lib.php),
+# beide schreiben unter flock auf die Sperrdatei.
+DATEI_SOLLWERT_EMPFANGEN = PDATA / "sollwert_empfangen"
+DATEI_SOLLWERT_SPERRE = PDATA / "sollwert_empfangen.sperre"
+# Ein Merker weiter als so viele Sekunden in der Zukunft gilt als ungueltig.
+SOLLWERT_ZUKUNFT_S = 60
 ORDNER_BEFEHLE = PDATA / "befehle"
 ORDNER_ANTWORTEN = PDATA / "antworten"
 ORDNER_ENERGIE = PDATA / "energie"
@@ -1304,6 +1311,71 @@ def schreibbefehl_vermerken() -> None:
         pass
 
 
+def sollwert_empfangen_lesen() -> int:
+    """Wann kam zuletzt ein gueltiger Sollwert von Loxone (Entscheidung Nr. 22)?
+
+    0, wenn der Merker fehlt, unlesbar oder unplausibel ist - dann misst der
+    Rueckfall wie bis 0.9.26 nur am letzten gesendeten Befehl. Ein Zeitpunkt
+    mehr als SOLLWERT_ZUKUNFT_S in der Zukunft (Uhr zurueckgestellt, Merker
+    von Hand beschrieben) zaehlt nicht: er hielte den Rueckfall sonst still
+    bis dahin auf.
+    """
+    try:
+        roh = DATEI_SOLLWERT_EMPFANGEN.read_text(encoding="ascii").strip()
+    except (OSError, ValueError):
+        return 0
+    if not roh.isdigit() or len(roh) > 12:
+        return 0
+    zeit = int(roh)
+    if zeit <= 0 or zeit > time.time() + SOLLWERT_ZUKUNFT_S:
+        return 0
+    return zeit
+
+
+def sollwert_empfangen_vermerken() -> bool:
+    """Den Merker "Sollwert empfangen" auf jetzt setzen (Entscheidung Nr. 22).
+
+    Dieselbe Sperrdatei wie der Endpunkt, unter flock; geschrieben wird eine
+    Nebendatei, die dann umbenannt wird - rueckfall_pruefen() liest ohne
+    Sperre und sieht so nie eine halbe Zahl. Die Sperrdatei ist
+    close-on-exec (O_CLOEXEC, im Endpunkt Modus "c+e") und vererbt sich an
+    keinen Kindprozess. Scheitert es, bleibt eine gebremste Protokollzeile:
+    der Rueckfall misst dann wie bisher am letzten gesendeten Befehl und
+    greift eher zu frueh als nie - kein stiller Dauerschutz.
+    """
+    tmp = DATEI_SOLLWERT_EMPFANGEN.with_name(DATEI_SOLLWERT_EMPFANGEN.name + ".tmp")
+    fd = -1
+    gesperrt = False
+    try:
+        import fcntl
+        fd = os.open(str(DATEI_SOLLWERT_SPERRE), os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o664)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        gesperrt = True
+        jetzt = int(time.time())
+        if sollwert_empfangen_lesen() >= jetzt:
+            return True
+        roh = str(jetzt).encode("ascii")
+        with open(tmp, "wb") as f:
+            if f.write(roh) != len(roh):
+                raise OSError("unvollstaendig geschrieben")
+        os.replace(tmp, DATEI_SOLLWERT_EMPFANGEN)
+        return True
+    except (OSError, ImportError) as err:
+        if gesperrt:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        melde_gebremst("sollwert_empfangen",
+                       f"Der Merker {DATEI_SOLLWERT_EMPFANGEN} (Sollwert empfangen) laesst sich nicht "
+                       f"schreiben ({err}). Der Rueckfall misst bis dahin nur am letzten gesendeten Befehl "
+                       f"und kann greifen, obwohl Loxone Sollwerte schickt.", 3600)
+        return False
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 async def befehl_ausfuehren(api, cfg: dict, b: dict) -> tuple[int, str, dict]:
     """Rueckgabe: (ok, Meldung, Zusatzfelder)."""
     aktion = str(b.get("aktion") or "")
@@ -1543,6 +1615,13 @@ async def warteschlange(api, cfg: dict) -> bool:
             ok, meldung, zusatz = 0, fehlertext(err), {}
             if ist_429(err):
                 _ZAEHLWERK["http429"] += 1
+        # Entscheidung Nr. 22: ein Sollwert vom Endpunkt (Loxone), den der
+        # Dienst angenommen hat - gesendet oder unveraendert (Schrittweite) -,
+        # haelt den Rueckfall auf. Vor der Antwort, damit der Merker steht,
+        # wenn der Endpunkt antwortet. Befehle aus dem Reiter Test tragen
+        # keine Quelle und zaehlen nur ueber das Senden (letzter_schreibbefehl).
+        if ok == 1 and b.get("quelle") == "endpunkt" and b.get("aktion") != "abruf":
+            sollwert_empfangen_vermerken()
         antwort_schreiben(kennung, ok, meldung, zusatz)
         _LOG.info("Befehl %s (%s): ok=%s %s", kennung, b.get("aktion"), ok, meldung)
         if b.get("aktion") == "abruf" and ok:
@@ -1560,6 +1639,12 @@ async def warteschlange(api, cfg: dict) -> bool:
 #
 # Ab Werk aus (rueckfall_min = 0). Wer ihn einschaltet, bekommt einen Eingriff,
 # der ohne sein Zutun geschieht - das gehoert entschieden, nicht vorgegeben.
+#
+# Gemessen wird ab dem JUENGEREN von "zuletzt gesendet" (letzter_schreibbefehl,
+# auch nach dem Rueckfall selbst) und "zuletzt von Loxone empfangen"
+# (sollwert_empfangen, Entscheidung Nr. 22). Bis 0.9.26 nur ab dem gesendeten:
+# einen gleichbleibenden Sollwert senden Gleichwert-Unterdrueckung (60 s) und
+# Schrittweite nicht erneut, und der Rueckfall griff, obwohl Loxone lebte.
 # ---------------------------------------------------------------------------
 async def rueckfall_pruefen(api, cfg: dict) -> None:
     minuten = int(cfg.get("rueckfall_min") or 0)
@@ -1568,8 +1653,13 @@ async def rueckfall_pruefen(api, cfg: dict) -> None:
     try:
         letzte = int(DATEI_LETZTER_SCHREIB.read_text())
     except (OSError, ValueError):
+        letzte = 0
+    # Ein fehlender oder unbrauchbarer Merker "empfangen" zaehlt 0: dann gilt
+    # das bisherige Verhalten (nur der gesendete Befehl).
+    bezug = max(letzte, sollwert_empfangen_lesen())
+    if bezug <= 0:
         return          # es gab nie einen Sollwert - also nichts zurueckzunehmen
-    if letzte <= 0 or (time.time() - letzte) < minuten * 60:
+    if (time.time() - bezug) < minuten * 60:
         return
     modus = str(cfg.get("rueckfall_modus") or "eigenverbrauch")
     getan = []

@@ -40,6 +40,11 @@
  * Dienst nicht; die Antwort ist HTTP 200, SET;OK=1;AKTION=hauslast;
  * UNVERAENDERT=1;MELDUNG=.. (ohne SEIT_S). Bis 0.9.24 OK=0 mit HTTP 500.
  *
+ * Rueckfall (Entscheidung Nr. 22, 01.10.2026): jeder angenommene Sollwert -
+ * gesendet oder UNVERAENDERT=1 - setzt den Merker data/sollwert_empfangen,
+ * an dem der Dienst den Rueckfall misst (ak_sollwert_empfangen_vermerken()).
+ * Abgewiesene Aufrufe (Token, Parameter, Steuerung aus, OK=0) setzen ihn nicht.
+ *
  * Der Endpunkt spricht NIE selbst mit der Anker-Cloud. Lesende Aktionen
  * beantwortet er aus dem Zwischenspeicher, schaltende legt er in einer
  * Warteschlange ab, die der Dienst abarbeitet.
@@ -416,6 +421,8 @@ if ($ak_gw_schl !== '') {
     $ak_seit = ak_gleichwert_seit($ak_gw_merker, $ak_gw_schl, $ak_gw_wert);
     if ($ak_seit >= 0) {
         ak_gleichwert_schliessen($ak_gw, null);
+        // Derselbe Wert wie eben gesendet: Loxone lebt (Nr. 22).
+        ak_sollwert_empfangen_vermerken();
         printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=Derselbe Wert ging vor %d s hinaus - nichts gesendet.\n",
             $ak_aktion, $ak_seit, $ak_seit);
         exit;
@@ -424,6 +431,13 @@ if ($ak_gw_schl !== '') {
 
 // Die ungeheilte Konfiguration von oben (X-1): der Endpunkt schreibt nie
 // die Konfiguration aus der Zweitschrift zurueck, auch nicht beim Einreihen.
+// Kennzeichen fuer den Dienst (Nr. 22): nimmt er diesen Sollwert an
+// (ok=1, gesendet oder unveraendert), setzt ER den Merker "Sollwert
+// empfangen" - auch wenn hier niemand mehr auf die Antwort wartet (OK=2).
+// Die Gleichwert-Werte oben sind schon gebildet; quelle gehoert nicht dazu.
+if ($ak_gw_schl !== '') {
+    $ak_befehl['quelle'] = 'endpunkt';
+}
 $ak_abgesetzt = ak_befehl_absetzen($ak_befehl, null, $ak_cfg);
 list($ak_erg, $ak_meldung) = $ak_abgesetzt;
 // Innerhalb der Schrittweite (Nr. 21) ging nichts hinaus: der Merker behaelt

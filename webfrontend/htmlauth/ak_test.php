@@ -307,9 +307,14 @@ function ak_pruefungen()
         !empty($cfg['steuerung_ein']) ? ak_t('TEST.A_STEUERUNG_EIN') : ak_t('TEST.A_STEUERUNG_AUS'));
 
     if (!empty($cfg['steuerung_ein'])) {
+        // Nr. 22: wann kam zuletzt ein Sollwert von Loxone? Daran misst der
+        // Rueckfall (neben dem zuletzt gesendeten Befehl).
+        $rf_t = ak_sollwert_empfangen();
         $zeilen[] = ak_pruefzeile((int) $cfg['rueckfall_min'] > 0 ? 1 : -1, ak_t('TEST.F_RUECKFALL'),
             (int) $cfg['rueckfall_min'] > 0
                 ? sprintf(ak_t('TEST.A_RUECKFALL_EIN'), (int) $cfg['rueckfall_min'], ak_e($cfg['rueckfall_modus']))
+                  . '. ' . ($rf_t > 0 ? sprintf(ak_t('TEST.A_RUECKFALL_EMPFANGEN'), max(0, time() - $rf_t))
+                                      : ak_t('TEST.A_RUECKFALL_NIE'))
                 : ak_t('TEST.A_RUECKFALL_AUS'));
     }
 

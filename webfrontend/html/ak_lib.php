@@ -1308,6 +1308,78 @@ function ak_gleichwert_nachfuehren($befehl, $erg)
         ak_gleichwert_wert($befehl), (int) $erg === 1));
 }
 
+/* ---------------- Sollwert empfangen (Entscheidung Nr. 22, 01.10.2026) ----
+ *
+ * Der Rueckfall des Dienstes (rueckfall_min, ab Werk aus) misst die Zeit
+ * seit dem letzten gueltigen Sollwert von Loxone. Bis 0.9.26 mass er nur ab
+ * dem letzten GESENDETEN Befehl: einen gleichbleibenden Sollwert senden die
+ * Gleichwert-Unterdrueckung und die Schrittweite nicht erneut, und der
+ * Rueckfall griff, obwohl Loxone lebte.
+ *
+ * Merker data/sollwert_empfangen (Unix-Zeit). Der Endpunkt setzt ihn, wenn
+ * die Gleichwert-Unterdrueckung antwortet; den eingereihten Befehl kennzeichnet
+ * er mit 'quelle' => 'endpunkt', und der Dienst setzt ihn nach ok=1
+ * (sollwert_empfangen_vermerken() in bin/ankersolix.py). Beide schreiben unter
+ * flock auf data/sollwert_empfangen.sperre ("c+e": close-on-exec) eine
+ * Nebendatei und benennen sie um. Fehlt der Merker oder laesst er sich nicht
+ * schreiben, misst der Rueckfall wie bisher am gesendeten Befehl - er greift
+ * dann eher zu frueh als nie. Der Reiter Test setzt ihn nie.
+ */
+
+/** Zeitpunkt des letzten empfangenen Sollwerts, 0 = keiner oder unbrauchbar
+ * (mehr als 60 s in der Zukunft zaehlt nicht, wie im Dienst). */
+function ak_sollwert_empfangen()
+{
+    $f = ak_paths()['datadir'] . '/sollwert_empfangen';
+    if (!is_file($f)) {
+        return 0;
+    }
+    $roh = trim((string) @file_get_contents($f));
+    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+        return 0;
+    }
+    $t = (int) $roh;
+    return ($t > 0 && $t <= time() + 60) ? $t : 0;
+}
+
+/**
+ * Den Merker auf jetzt setzen. Rueckgabe true bei Erfolg. Scheitert es,
+ * bleibt die Antwort an Loxone unberuehrt (der Sollwert ist ja behandelt);
+ * eine gebremste Protokollzeile nennt die Folge.
+ */
+function ak_sollwert_empfangen_vermerken()
+{
+    $p = ak_paths();
+    $f = $p['datadir'] . '/sollwert_empfangen';
+    $fh = is_dir($p['datadir']) ? @fopen($f . '.sperre', 'c+e') : false;
+    if ($fh !== false && !@flock($fh, LOCK_EX)) {
+        @fclose($fh);
+        $fh = false;
+    }
+    $ok = false;
+    if ($fh !== false) {
+        $jetzt = time();
+        if (ak_sollwert_empfangen() >= $jetzt) {
+            $ok = true;
+        } else {
+            $tmp = $f . '.tmp';
+            $roh = (string) $jetzt;
+            $ok = @file_put_contents($tmp, $roh) === strlen($roh) && @rename($tmp, $f);
+            if (!$ok) {
+                @unlink($tmp);
+            }
+        }
+        @flock($fh, LOCK_UN);
+        @fclose($fh);
+    }
+    if (!$ok) {
+        ak_log_wenn_neu('sollwert_empfangen', 'Der Merker ' . $f . ' (Sollwert empfangen) laesst sich nicht '
+            . 'schreiben - der Rueckfall misst bis dahin nur am letzten gesendeten Befehl und kann greifen, '
+            . 'obwohl Loxone Sollwerte schickt. Pruefen: Datenordner, Platz und Eigentuemer (loxberry).');
+    }
+    return $ok;
+}
+
 /* ---------------- Befehlswarteschlange ----------------
  *
  * Sowohl der Miniserver-Endpunkt als auch der Reiter Test setzen Befehle ueber
