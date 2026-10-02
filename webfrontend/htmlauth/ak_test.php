@@ -318,6 +318,56 @@ function ak_pruefungen()
                 : ak_t('TEST.A_RUECKFALL_AUS'));
     }
 
+    /* --- 7b. Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25) ---
+     * Je Anlage eine Zeile. Ueber eine leere Menge wird nicht geurteilt (Klasse 8):
+     * kein Befehl im Fenster ist ein Hinweis, kein Haken. Ein Schreiber ist ein
+     * Haken, mehrere sind ein Hinweis (die Wache meldet, sie urteilt nicht), ein
+     * unlesbarer Merker ist ein Kreuz. Die Einstellungen kommen frisch aus der
+     * Datei ($cfg oben). Die Tabelle der Schreiber steht unter der Selbstpruefung. */
+    $ak_ww = ak_wache_einstellungen($cfg);
+    if ($ak_ww['wache_ein'] !== 1) {
+        $zeilen[] = ak_pruefzeile(-1, ak_t('TEST.F_WACHE_ALLE'), ak_t('TEST.A_WACHE_AUS'));
+    } else {
+        $ak_wan = ak_wache_anlagen();
+        if (!$ak_wan) {
+            $zeilen[] = ak_pruefzeile(-1, ak_t('TEST.F_WACHE_ALLE'),
+                sprintf(ak_t('TEST.A_WACHE_LEER'), $ak_ww['wache_fenster_min']));
+        }
+        foreach ($ak_wan as $ak_wnr) {
+            $ak_wf = sprintf(ak_t('TEST.F_WACHE'), $ak_wnr);
+            list($ak_wzs, $ak_wls) = ak_wache_lesen($ak_wnr);
+            $ak_wim = array();
+            foreach ($ak_wls as $ak_wx) {
+                if (abs(time() - $ak_wx['zuletzt']) < 60 * $ak_ww['wache_fenster_min']) {
+                    $ak_wim[] = $ak_wx;
+                }
+            }
+            if ($ak_wzs === 'merker') {
+                $zeilen[] = ak_pruefzeile(0, $ak_wf, sprintf(ak_t('TEST.A_WACHE_MERKER'), ak_e(ak_wache_datei($ak_wnr))));
+            } elseif (!$ak_wim) {
+                $zeilen[] = ak_pruefzeile(-1, $ak_wf, sprintf(ak_t('TEST.A_WACHE_LEER'), $ak_ww['wache_fenster_min']));
+            } elseif (count($ak_wim) === 1) {
+                $zeilen[] = ak_pruefzeile(1, $ak_wf, sprintf(ak_t('TEST.A_WACHE_EINER'),
+                    ak_e(ak_wache_name($ak_wim[0], ak_t('TEST.W_OHNE_KENNUNG'))), $ak_ww['wache_fenster_min']));
+            } else {
+                $ak_wn = array();
+                foreach ($ak_wim as $ak_wx) {
+                    $ak_wn[] = ak_wache_name($ak_wx, ak_t('TEST.W_OHNE_KENNUNG'));
+                }
+                $zeilen[] = ak_pruefzeile(-1, $ak_wf, sprintf(ak_t('TEST.A_WACHE_MEHRERE'),
+                    count($ak_wim), $ak_ww['wache_fenster_min'], ak_e(implode(', ', $ak_wn))));
+            }
+        }
+    }
+    if ($ak_ww['wache_sperren_ein'] !== 1) {
+        $zeilen[] = ak_pruefzeile(-1, ak_t('TEST.F_WACHE_SPERRE'), ak_t('TEST.A_WACHE_SPERRE_AUS'));
+    } else {
+        list(, , $ak_wsf) = ak_wache_sperre_urteil($ak_ww, '', '');
+        $zeilen[] = ($ak_wsf !== '')
+            ? ak_pruefzeile(0, ak_t('TEST.F_WACHE_SPERRE'), ak_t('TEST.A_WACHE_SPERRE_LISTE'))
+            : ak_pruefzeile(1, ak_t('TEST.F_WACHE_SPERRE'), sprintf(ak_t('TEST.A_WACHE_SPERRE_AN'), ak_e($ak_ww['wache_erlaubt'])));
+    }
+
     /* --- 8. Bleibt die Oberflaeche mit sich selbst im Reinen? --- */
     list($stand, $text) = ak_kongruenz();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_KONGRUENZ'), $text);

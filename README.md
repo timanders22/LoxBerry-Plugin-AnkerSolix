@@ -16,6 +16,19 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.27
+
+Schreiber-Wache (Energie-1, Entscheidung 25).
+Gemessen mit Attrappen unter PHP 7.4 und 8.5 sowie mit echtem Dienst in WSL; nicht am Gerät, nicht an einer echten Anlage.
+
+* **Kennung des Schreibers:** Sollwert-Befehle nehmen ein optionales `&von=<kennung>` an, die Vorlage sendet `von=loxone`. Eine ungültige Kennung wird mit 400 `GRUND=VON` abgewiesen, dabei wird nichts eingereiht.
+* **Schreiber-Wache, ab Werk an:** Schreiben innerhalb von 15 Minuten mehrere Schreiber, meldet das Plugin es im Protokoll, im Reiter Test (24 h) und in der Antwort mit `;SCHREIBER=n`. Eine LoxBerry-Meldung dazu ist wählbar und ab Werk aus.
+* **„Fremde Schreiber abweisen“, ab Werk aus:** Eingeschaltet antwortet ein nicht erlaubter Schreiber mit 409 `GRUND=FREMDSCHREIBER`, nichts wird eingereiht. Die Rücknahme `modus=eigenverbrauch` wird nie abgewiesen.
+* **Merker nicht nutzbar:** Der Befehl geht trotzdem, die Antwort trägt `;WACHE=MERKER`.
+* Gleichwert-Bremse, Schrittweite und Rückfall sind unverändert, es gibt kein neues MQTT-Thema.
+
+**In Loxone:** nichts zu tun. Wer die Vorlage neu einliest, bekommt `von=loxone` an den Befehlen.
+
 ## Version 0.9.26
 
 Entscheidung 22 (Verbesserungsliste `Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`).
@@ -597,6 +610,7 @@ Alle Aufrufe brauchen das Token aus dem Reiter *Einbindung in Loxone*.
 | `?token=T&aktion=notstromreserve&prozent=P` | Notstromreserve setzen |
 | `?token=T&aktion=pvlimit&sn=SN&watt=W` | Wechselrichter begrenzen (MI80, 0–800 W) |
 | `?token=T&aktion=abruf` | sofort abrufen statt auf den Takt zu warten |
+| `…&von=<kennung>` | an jedem Sollwert-Befehl oben optional: Herkunft für die Schreiber-Wache (siehe unten) |
 
 **Ein Strich als Wert** heißt: die Cloud hat dieses Feld nicht geliefert. Es
 wird bewusst keine 0 gesendet — eine 0 wäre eine stille Falschaussage. Loxone
@@ -630,6 +644,41 @@ Rückfall wie bisher zurück. Gesendet wird dadurch nichts zusätzlich. Lässt s
 der Merker `sollwert_empfangen` nicht lesen oder schreiben, misst der Rückfall
 wie bisher nur am letzten gesendeten Befehl – er greift dann eher zu früh als
 nie. Die Zeile *Rückfall* im Reiter *Test* nennt das Alter des Merkers.
+
+### Schreiber-Wache
+
+Jeder Sollwert-Befehl (`hauslast`, `modus`, `reserve`, `einspeisung`,
+`einspeisegrenze`, `notstromreserve`, `pvlimit`) darf `&von=<kennung>` tragen
+(1 bis 32 Zeichen aus Buchstaben, Ziffern, `_` und `-`); die Loxone-Vorlage
+setzt `von=loxone`. Bekannte Kennungen der übrigen Hausplugins sind
+`einspeisebremse`, `awattar` und `evcc`. Der Endpunkt merkt sich je Anlage
+Kennung und Absenderadresse. Eine ungültige Kennung (auch leer oder als Liste)
+wird mit HTTP 400 `SET;OK=0;AKTION=…;GRUND=VON` abgewiesen, und nichts wird
+eingereiht; eine Adresse ohne `von` geht immer und erscheint als „ohne
+Kennung“. `aktion=abruf` und die lesenden Aufrufe beachten `von` nicht.
+
+* **Melden (ab Werk an):** Schicken innerhalb des Zeitfensters (ab Werk 15 min,
+  einstellbar 1–120) mehrere Schreiber Befehle an dieselbe Anlage, steht das
+  gebremst im Protokoll, im Reiter *Test* (Tabelle „Schreiber der letzten 24
+  Stunden“) und in jeder weiteren Antwort als `;SCHREIBER=n`. Abgewiesen wird
+  nichts. Auf Wunsch kommt eine LoxBerry-Meldung dazu, sobald neue Schreiber
+  hinzukommen (ab Werk aus).
+* **Fremde Schreiber abweisen (ab Werk aus):** Befehle eines Schreibers, der
+  nicht in der Liste der erlaubten Schreiber steht, bekommen HTTP 409
+  `SET;OK=0;AKTION=…;GRUND=FREMDSCHREIBER`; nichts wird eingereiht, und der
+  Rückfall zählt sie nicht als Sollwert von Loxone. Die Liste nennt je Eintrag
+  eine Kennung, eine Adresse oder Kennung@Adresse. Die Rücknahme
+  `modus=eigenverbrauch` (die Solarbank regelt wieder selbst) wird nie
+  abgewiesen. Erst einschalten, wenn der Reiter *Test* eine Woche lang nur die
+  erwarteten Schreiber zeigt.
+* Lässt sich der Merker (`data/plugins/<ordner>/schreiber_anlage<N>.json`)
+  nicht schreiben, geht der Befehl trotzdem weiter; die Antwort trägt dann
+  `;WACHE=MERKER`. Gleichwert-Unterdrückung, Schrittweite und Rückfall bleiben,
+  wie sie waren. Ein neues MQTT-Thema gibt es nicht. Nach einer Aktualisierung
+  beginnt die Wache leer.
+* Eine ältere Vorlage ohne `von=loxone` arbeitet weiter. Es genügt, an die
+  bestehenden Befehle des virtuellen Ausgangs `&von=loxone` anzuhängen; ein
+  zweiter Import legte die Bausteine doppelt an.
 
 Die **Rohdaten der Cloud** mit den echten Feldnamen gibt der Endpunkt bewusst
 **nicht** heraus: sie tragen die Kontokennung, und der Endpunkt liegt im

@@ -177,6 +177,14 @@ function ak_vorgaben()
         /* --- Oberflaeche und Endpunkt --- */
         'aktionstoken'       => '',
         'wartezeit'          => 6,
+        /* --- Schreiber-Wache am Endpunkt (Energie-1 C1, Entscheidung Nr. 25) ---
+         * Meldet ab Werk (aendert an der Anlage nichts), sperrt ab Werk nicht.
+         * Nur Oberflaeche und Endpunkt - ak_vorgaben_dienst() nimmt sie heraus. */
+        'wache_ein'          => 1,     // mehrere Schreiber im Fenster melden (Protokoll, Reiter Test)
+        'wache_fenster_min'  => 15,    // Fenster in Minuten (1..120)
+        'wache_lb_melden'    => 0,     // neue Runde zusaetzlich als LoxBerry-Meldung
+        'wache_sperren_ein'  => 0,     // fremde Schreiber mit 409 abweisen
+        'wache_erlaubt'      => '',    // erlaubte Schreiber: Kennung, Adresse oder Kennung@Adresse
     );
 }
 
@@ -205,6 +213,8 @@ function ak_zahlgrenzen()
         'rueckfall_min'  => array(0, 1440),
         'melden_alter'   => array(60, 86400),
         'wartezeit'      => array(0, 20),
+        // Schreiber-Wache (Energie-1 C1): ganze Minuten.
+        'wache_fenster_min' => array(1, 120),
     );
 }
 
@@ -212,7 +222,9 @@ function ak_zahlgrenzen()
 function ak_haken_felder()
 {
     return array('ohne_details', 'ohne_energie', 'ohne_prognose', 'zaehler_ein',
-                 'mqtt_ein', 'mqtt_nur_aenderung', 'steuerung_ein', 'melden_ein');
+                 'mqtt_ein', 'mqtt_nur_aenderung', 'steuerung_ein', 'melden_ein',
+                 // Schreiber-Wache (Energie-1 C1)
+                 'wache_ein', 'wache_lb_melden', 'wache_sperren_ein');
 }
 
 /** Die Schluessel, die auch der Dienst kennen muss. */
@@ -220,6 +232,11 @@ function ak_vorgaben_dienst()
 {
     $v = ak_vorgaben();
     unset($v['aktionstoken'], $v['wartezeit']);
+    // Die Schreiber-Wache (Energie-1 C1) lebt nur im Endpunkt; der Dienst kennt sie
+    // nicht und braucht sie nicht (sonst meldete der Vorgaben-Abgleich "nur PHP").
+    foreach (ak_wache_schluessel() as $ak_wk) {
+        unset($v[$ak_wk]);
+    }
     return $v;
 }
 
@@ -1380,6 +1397,588 @@ function ak_sollwert_empfangen_vermerken()
     return $ok;
 }
 
+/* ================= Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25) ==================
+ *
+ * WOZU. Ein Stellglied sollen nicht zwei Regler zugleich fuehren. Im Haus
+ * koordiniert Loxone (Vorrangkette Hausspeicher vor Auto, ENERGIE1_ENTWURF.md
+ * Weg C); ein zweiter Schreiber am Endpunkt - ein anderes Plugin (die
+ * Einspeisebremse am Speicherweg, die aWATTar-Kopplung), ein Skript, ein zweiter
+ * Miniserver - stellte dieselbe Anlage gegen Loxone, und bis 0.9.27
+ * unterschied der Endpunkt seine Schreiber nicht.
+ *
+ * WAS. Jeder Sollwert-Befehl (ak_wache_aktionen(): hauslast, modus, reserve,
+ * einspeisung, einspeisegrenze, notstromreserve, pvlimit - dieselben sieben wie
+ * die Gleichwert-Unterdrueckung) wird mit seiner Herkunft gemerkt: optional
+ * &von=<kennung> (die Vorlage setzt von=loxone) und der Absender (REMOTE_ADDR).
+ * Ein Schreiber ist das Paar Kennung@Absender; ohne &von= heisst er "ohne
+ * Kennung" - das ist kein Fehler, so erscheint jede Loxone-Vorlage, die nicht
+ * angepasst wurde. Nicht gemerkt wird aktion=abruf: er stellt keinen Sollwert,
+ * sondern holt nur Werte (eigene 30-s-Bremse); zwei Abrufer fuehren keine
+ * Anlage gegeneinander.
+ * Der Merker gilt JE ANLAGE (data/schreiber_anlage<N>.json): ein Konflikt
+ * besteht nur, wenn zwei Schreiber dasselbe Stellglied fuehren (Bauform Marstek
+ * 1.1.19 "je Speicher"). Kommen innerhalb des Fensters (wache_fenster_min, ab
+ * Werk 15) Befehle von mehr als einem Schreiber an dieselbe Anlage, steht das
+ *   - im Protokoll, gebremst: eine Zeile, wenn die Runde der Schreiber neu ist,
+ *     sonst hoechstens eine je Fenster,
+ *   - in der Antwort (;SCHREIBER=n),
+ *   - im Reiter Test (die Schreiber der letzten 24 h mit Zeitpunkt und Anzahl),
+ *   - bei einer neuen Runde und nur mit wache_lb_melden (ab Werk aus) als
+ *     LoxBerry-Meldung (SEVERITY 4).
+ * Abgewiesen wird dadurch NICHTS (melden ab Werk an, Entscheidung Nr. 25).
+ *
+ * SPERREN (wache_sperren_ein, ab Werk aus): ein Befehl eines Schreibers, der
+ * nicht in wache_erlaubt steht, bekommt HTTP 409 GRUND=FREMDSCHREIBER; nichts
+ * wird eingereiht, und der Merker "Sollwert empfangen" (Nr. 22) bleibt
+ * unberuehrt. Eine Ruecknahme wird nie abgewiesen (ak_wache_ruecknahme():
+ * modus=eigenverbrauch - die Betriebsart, in der die Solarbank selbst nach dem
+ * Smart Meter regelt; dieselbe, auf die das Plugin selbst zurueckstellt:
+ * Rueckfall ab Werk, --freigeben, Deinstallation). Wer die Regie an die
+ * Geraeteautomatik zurueckgibt, fuehrt keinen zweiten Regelkreis. Das Urteil
+ * braucht den Merker nicht, es haengt nur an der Liste und an der Anfrage. Ist
+ * Sperren an, die Liste aber leer oder unbrauchbar (nur von Hand moeglich -
+ * Formular und Sicherung weisen das ab), wirkt die Sperre nicht, und das
+ * Protokoll sagt es: eine verschriebene Liste darf den Hausregler nicht
+ * aussperren.
+ *
+ * DER MERKER FAELLT OFFEN AUS. Geoeffnet mit close-on-exec ('e'), unter flock
+ * (hoechstens 2 s warten), gehalten nur fuer Lesen und Schreiben, nie waehrend
+ * des Einreihens (das kommt erst danach, unter dem Merker der
+ * Gleichwert-Unterdrueckung). Laesst er sich nicht oeffnen, sperren oder
+ * schreiben, geht der Befehl trotzdem weiter - die Antwort traegt ;WACHE=MERKER,
+ * das Protokoll eine Zeile je Zustandswechsel. Anders als die
+ * Gleichwert-Unterdrueckung (503, faellt geschlossen aus): die entscheidet ueber
+ * das Senden, die Wache beobachtet nur. Eine Wache, die wegen eines kaputten
+ * Merkers den Hausregler abwiese, richtete genau den Schaden an, vor dem sie
+ * warnen soll.
+ *
+ * WARUM DER DATENORDNER. AnkerSolix hat keinen Laufzeitordner auf der Ramdisk;
+ * alle Merker des Endpunkts (Gleichwert, Sofortabruf, Sollwert empfangen) liegen
+ * in data/plugins/<ordner>. Der Installer raeumt ihn bei jeder Aktualisierung
+ * ab - danach beginnt die Wache leer, und das ist richtig so.
+ */
+if (!defined('AK_WACHE_AUFBEWAHREN_S')) {
+    define('AK_WACHE_AUFBEWAHREN_S', 86400);   // Reiter Test: Schreiber der letzten 24 h
+}
+if (!defined('AK_WACHE_HOECHSTENS')) {
+    define('AK_WACHE_HOECHSTENS', 20);          // Schreiber je Merker (je Anlage)
+}
+
+/** Die Einstellungen der Wache - EINE Liste fuer Vorgaben, Sicherung und Formular. */
+function ak_wache_schluessel()
+{
+    return array('wache_ein', 'wache_fenster_min', 'wache_lb_melden', 'wache_sperren_ein', 'wache_erlaubt');
+}
+
+/** Die Sollwert-Befehle, die die Wache sieht (dieselben wie ak_gleichwert_schluessel()). */
+function ak_wache_aktionen()
+{
+    return array('hauslast', 'modus', 'reserve', 'einspeisung', 'einspeisegrenze', 'notstromreserve', 'pvlimit');
+}
+
+/** Pfad des Merkers einer Anlage ("01" = "1" wie im Dienst und in der Gleichwert-Unterdrueckung). */
+function ak_wache_datei($anlage)
+{
+    return ak_paths()['datadir'] . '/schreiber_anlage' . (int) $anlage . '.json';
+}
+
+/** Eine Kennung fuer &von= und fuer die Liste: 1 bis 32 Zeichen aus A-Z a-z 0-9 _ -.
+ *  Ohne Punkt und Doppelpunkt - so verwechselt sie sich nie mit einer Adresse.
+ *  \z statt $: ein angehaengter Zeilenumbruch (von=loxone%0A) passt nicht. */
+function ak_wache_kennung_gueltig($k)
+{
+    return is_string($k) && preg_match('/^[A-Za-z0-9_\-]{1,32}\z/', $k) === 1;
+}
+
+/** Eine Absenderadresse (IPv4 oder IPv6) fuer die Liste. */
+function ak_wache_adresse_gueltig($a)
+{
+    return is_string($a) && $a !== '' && filter_var($a, FILTER_VALIDATE_IP) !== false;
+}
+
+/** Zwei Adressen gleich? IPv6 in jeder Schreibweise (::1 = 0:0:0:0:0:0:0:1). */
+function ak_wache_adresse_gleich($a, $b)
+{
+    if ((string) $a === (string) $b) {
+        return true;
+    }
+    $x = @inet_pton((string) $a);
+    $y = @inet_pton((string) $b);
+    return $x !== false && $y !== false && $x === $y;
+}
+
+/** Der Absender dieser Anfrage, auf die zulaessigen Zeichen beschraenkt (wie ak_endpunkt_log). */
+function ak_wache_absender()
+{
+    $ip = isset($_SERVER['REMOTE_ADDR']) ? preg_replace('/[^0-9A-Fa-f:.]/', '', (string) $_SERVER['REMOTE_ADDR']) : '';
+    return substr((string) $ip, 0, 45);
+}
+
+/**
+ * Die Liste der erlaubten Schreiber zerlegen (rein).
+ * Eintraege durch Komma, Semikolon oder Leerraum getrennt, je Eintrag eine Kennung
+ * ("loxone"), eine Adresse (etwa die des Miniservers) oder beides als
+ * Kennung@Adresse. Hoechstens 16 Eintraege.
+ * Rueckgabe: array(Eintraege array('von','ip'), unzulaessige Teile).
+ */
+function ak_wache_liste($text)
+{
+    if (!is_string($text)) {
+        return array(array(), array('?'));
+    }
+    $ein = array();
+    $fehl = array();
+    foreach (preg_split('/[\s,;]+/', trim($text)) as $teil) {
+        if ($teil === '') {
+            continue;
+        }
+        if (strpos($teil, '@') !== false) {
+            list($von, $ip) = explode('@', $teil, 2);
+            if (ak_wache_kennung_gueltig($von) && ak_wache_adresse_gueltig($ip)) {
+                $ein[] = array('von' => $von, 'ip' => $ip);
+                continue;
+            }
+        } elseif (ak_wache_adresse_gueltig($teil)) {
+            $ein[] = array('von' => '', 'ip' => $teil);
+            continue;
+        } elseif (ak_wache_kennung_gueltig($teil)) {
+            $ein[] = array('von' => $teil, 'ip' => '');
+            continue;
+        }
+        $fehl[] = substr((string) preg_replace('/[^\x20-\x7E]/', '?', $teil), 0, 40);
+    }
+    if (count($ein) > 16) {
+        $fehl[] = '> 16';
+    }
+    return array($ein, $fehl);
+}
+
+/** Die Wertpruefung von wache_erlaubt - EINE Stelle fuer Formular und Zurueckspielen.
+ *  Rueckgabe: '' = gueltig, sonst die Beanstandung (ohne den Wert). */
+function ak_wache_liste_mangel($w)
+{
+    if (!is_string($w)) {
+        return ak_t('EINST.SICH_TEXT');
+    }
+    if (strlen($w) > 512 || preg_match('/[\x00-\x1F\x7F]/', $w) === 1) {
+        return ak_t('EINST.SICH_WACHE_LISTE');
+    }
+    list(, $fehl) = ak_wache_liste($w);
+    return $fehl ? ak_t('EINST.SICH_WACHE_LISTE') : '';
+}
+
+/** Steht der Schreiber Kennung@Absender in der Liste? (rein) */
+function ak_wache_erlaubt(array $eintraege, $von, $ip)
+{
+    foreach ($eintraege as $e) {
+        if ($e['von'] !== '' && $e['von'] !== (string) $von) {
+            continue;
+        }
+        if ($e['ip'] !== '' && !ak_wache_adresse_gleich($e['ip'], $ip)) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+/** Die Einstellungen der Wache aus einer Konfiguration. Was die eigene Pruefung
+ *  (ak_sicherung_wert, dieselbe wie beim Zurueckspielen) nicht besteht - von Hand
+ *  bearbeitet -, gilt mit der Vorgabe; "Einstellungen sichern" warnt dann (X-3). */
+function ak_wache_einstellungen($cfg)
+{
+    $cfg = is_array($cfg) ? $cfg : array();
+    $v = ak_vorgaben();
+    $aus = array();
+    foreach (ak_wache_schluessel() as $k) {
+        $aus[$k] = (array_key_exists($k, $cfg) && ak_sicherung_wert($k, $cfg[$k]) === '') ? $cfg[$k] : $v[$k];
+    }
+    $aus['wache_ein'] = (int) $aus['wache_ein'];
+    $aus['wache_fenster_min'] = (int) $aus['wache_fenster_min'];
+    $aus['wache_lb_melden'] = (int) $aus['wache_lb_melden'];
+    $aus['wache_sperren_ein'] = (int) $aus['wache_sperren_ein'];
+    $aus['wache_erlaubt'] = (string) $aus['wache_erlaubt'];
+    return $aus;
+}
+
+/** Kreuzpruefung (rein): Sperren an ohne einen einzigen erlaubten Schreiber wiese
+ *  jeden Befehl ab - auch den des Hausreglers. Rueckgabe true = Mangel. */
+function ak_wache_kreuz($c)
+{
+    return is_array($c) && isset($c['wache_sperren_ein'], $c['wache_erlaubt'])
+        && is_scalar($c['wache_sperren_ein']) && (string) $c['wache_sperren_ein'] === '1'
+        && is_string($c['wache_erlaubt']) && trim($c['wache_erlaubt']) === '';
+}
+
+/** Ist dieser Befehl eine Ruecknahme? Nur modus=eigenverbrauch gibt die Regie an die
+ *  Geraeteautomatik zurueck (Kopf); er wird nie abgewiesen, gemerkt aber schon. */
+function ak_wache_ruecknahme($aktion, $wert)
+{
+    return $aktion === 'modus' && (string) $wert === 'eigenverbrauch';
+}
+
+/**
+ * Das Urteil der Sperre (rein). Rueckgabe array(aktiv, erlaubt, fehler):
+ * aktiv = Sperren an UND eine brauchbare Liste. fehler 'LISTE': Sperren an, die
+ * Liste aber leer oder unbrauchbar - dann wirkt die Sperre NICHT (Kopf).
+ */
+function ak_wache_sperre_urteil(array $w, $von, $ip)
+{
+    if ((int) $w['wache_sperren_ein'] !== 1) {
+        return array(false, true, '');
+    }
+    list($ein, $fehl) = ak_wache_liste((string) $w['wache_erlaubt']);
+    if ($fehl || !$ein) {
+        return array(false, true, 'LISTE');
+    }
+    return array(true, ak_wache_erlaubt($ein, $von, $ip), '');
+}
+
+/**
+ * Den Merker fortschreiben (rein, ohne Datei - von den Proben direkt gerufen).
+ * $m: array('schreiber' => array('<von>' . '@' . '<ip>' => Eintrag), 'runde' => '', 'gemeldet' => ts)
+ * Rueckgabe: array(Merker, Schreiber im Fenster (neueste zuerst), melden, neue Runde).
+ * "Runde" ist die Menge der Schreiber im Fenster; gemeldet wird eine neue Runde
+ * sofort, dieselbe hoechstens einmal je Fenster. Faellt die Runde auf einen
+ * Schreiber zurueck, gilt die naechste zweite wieder als neu.
+ */
+function ak_wache_fortschreiben(array $m, $von, $ip, $art, $abgewiesen, $jetzt, $fenster_s)
+{
+    $jetzt = (int) $jetzt;
+    $liste = (isset($m['schreiber']) && is_array($m['schreiber'])) ? $m['schreiber'] : array();
+    $schl = (string) $von . '@' . (string) $ip;
+    $e = (isset($liste[$schl]) && is_array($liste[$schl])) ? $liste[$schl]
+        : array('von' => (string) $von, 'ip' => (string) $ip, 'erst' => $jetzt, 'n' => 0, 'abgewiesen' => 0);
+    $e['zuletzt'] = $jetzt;
+    $e['n'] = (int) (isset($e['n']) ? $e['n'] : 0) + 1;
+    $e['abgewiesen'] = (int) (isset($e['abgewiesen']) ? $e['abgewiesen'] : 0) + ($abgewiesen ? 1 : 0);
+    $e['art'] = (string) $art;
+    $liste[$schl] = $e;
+    // Aufbewahren: 24 h (in beide Richtungen - eine zurueckgesprungene Uhr laesst
+    // keinen Eintrag ewig stehen), hoechstens AK_WACHE_HOECHSTENS.
+    foreach ($liste as $k => $x) {
+        if (!is_array($x) || !isset($x['zuletzt'], $x['von'], $x['ip'])
+                || abs($jetzt - (int) $x['zuletzt']) > AK_WACHE_AUFBEWAHREN_S) {
+            unset($liste[$k]);
+        }
+    }
+    uasort($liste, function ($a, $b) {
+        return (int) $b['zuletzt'] - (int) $a['zuletzt'];
+    });
+    $liste = array_slice($liste, 0, AK_WACHE_HOECHSTENS, true);
+    $fenster = array();
+    foreach ($liste as $k => $x) {
+        if (abs($jetzt - (int) $x['zuletzt']) < (int) $fenster_s) {
+            $fenster[$k] = $x;
+        }
+    }
+    $gemeldet = isset($m['gemeldet']) ? (int) $m['gemeldet'] : 0;
+    $runde = '';
+    $melden = false;
+    $neu = false;
+    if (count($fenster) > 1) {
+        $k2 = array_keys($fenster);
+        sort($k2, SORT_STRING);
+        $runde = implode('|', $k2);
+        $neu = ($runde !== (isset($m['runde']) ? (string) $m['runde'] : ''));
+        $melden = $neu || abs($jetzt - $gemeldet) >= (int) $fenster_s;
+        if ($melden) {
+            $gemeldet = $jetzt;
+        }
+    } else {
+        $gemeldet = 0;
+    }
+    return array(array('schreiber' => $liste, 'runde' => $runde, 'gemeldet' => $gemeldet),
+                 array_values($fenster), $melden, $neu);
+}
+
+/** Ein Schreiber als Text (Kennung@Absender, ohne Kennung so benannt). $ohne: das Wort
+ *  fuer "ohne Kennung" - das Protokoll bleibt deutsch, der Reiter Test reicht die
+ *  Sprachdatei herein. */
+function ak_wache_name(array $x, $ohne = 'ohne Kennung')
+{
+    return ((string) $x['von'] !== '' ? $x['von'] : (string) $ohne) . '@' . ((string) $x['ip'] !== '' ? $x['ip'] : '?');
+}
+
+/** Die Schreiber einer Runde als Text fuer Protokoll und Meldung. */
+function ak_wache_text(array $fenster)
+{
+    $t = array();
+    foreach ($fenster as $x) {
+        $t[] = ak_wache_name($x)
+             . ' (' . (int) $x['n'] . 'x' . (!empty($x['abgewiesen']) ? ', ' . (int) $x['abgewiesen'] . ' abgewiesen' : '')
+             . ', zuletzt ' . date('H:i:s', (int) $x['zuletzt']) . ' ' . (string) $x['art'] . ')';
+    }
+    return implode(', ', $t);
+}
+
+/** Den Merker oeffnen - mit close-on-exec ('e'): ein Kindprozess erbt die flock-Sperre
+ *  sonst und haelt sie ueber das Ende des Endpunkts hinaus ("Sperre vererbt sich an
+ *  Kinder"). Unter Windows-PHP 7.4 und 8.5 geprueft: 'c+e' oeffnet ohne Meldung.
+ *  Rueckgabe Handle oder false; ein Verzeichnis an der Stelle ist false. */
+function ak_wache_oeffnen($f, $modus = 'c+')
+{
+    if (is_dir($f)) {
+        return false;
+    }
+    return @fopen($f, $modus . 'e');
+}
+
+/** Eine Zeile ins Protokoll des Plugins. Legt nichts an: fehlt der Logordner, bleibt
+ *  es bei der Antwort (der unangemeldete Endpunkt legt keine Ordner an). */
+function ak_wache_log($text, $stufe = 'INFO')
+{
+    $p = ak_paths();
+    if (!is_dir(dirname($p['log']))) {
+        return false;
+    }
+    return @file_put_contents($p['log'], '[' . date('Y-m-d H:i:s') . '] ' . $stufe . ' '
+        . str_replace(array("\r", "\n"), ' ', (string) $text) . "\n", FILE_APPEND | LOCK_EX) !== false;
+}
+
+/** Eine Protokollzeile je Zustandswechsel (gestoert <-> wieder in Ordnung), nicht je
+ *  Aufruf. Die Merkdatei data/.wache_<schl> steht fuer "gestoert"; angelegt mit 'x',
+ *  damit von gleichzeitigen Aufrufen nur einer die Zeile schreibt. Laesst sie sich
+ *  nicht anlegen, hoechstens eine Zeile je Stunde (ak_log_wenn_neu). */
+function ak_wache_zustand($schl, $gestoert, $text_gestoert, $text_wieder)
+{
+    $p = ak_paths();
+    $m = $p['datadir'] . '/.wache_' . preg_replace('/[^a-z0-9_]/', '', (string) $schl);
+    if ($gestoert) {
+        if (is_file($m)) {
+            return false;
+        }
+        $fh = is_dir($p['datadir']) ? @fopen($m, 'x') : false;
+        if ($fh === false) {
+            return is_file($m) ? false : ak_log_wenn_neu('wache_' . $schl, $text_gestoert);
+        }
+        @fwrite($fh, (string) time());
+        @fclose($fh);
+        return ak_wache_log($text_gestoert, 'WARNING');
+    }
+    if (is_file($m) && @unlink($m)) {
+        return ak_wache_log($text_wieder, 'INFO');
+    }
+    return false;
+}
+
+/** LoxBerry-Meldung der Wache (nur mit wache_lb_melden). Bindet loxberry_log.php
+ *  selbst ein - keine phplib laedt es von allein ("notify_ext() nie erreicht");
+ *  bin/ak_notify.php des Dienstes tut dasselbe. Die Pfade werden NACH dem Einbinden
+ *  neu geholt: loxberry_system.php setzt beim Einbinden ein eigenes $p. */
+function ak_wache_lb_melden($text)
+{
+    $ak_wp = ak_paths();
+    if ($ak_wp['home'] !== '' && !function_exists('notify_ext')) {
+        $ak_wl = $ak_wp['home'] . '/libs/phplib/loxberry_log.php';
+        if (is_file($ak_wl)) {
+            require_once $ak_wl;
+        }
+    }
+    if (!function_exists('notify_ext')) {
+        // Kein Bedienelement ohne Wirkung: gesagt, nicht behauptet.
+        ak_log_wenn_neu('wache_lb', 'Schreiber-Wache: die LoxBerry-Meldung ist eingeschaltet, aber '
+            . 'notify_ext() ist hier nicht vorhanden - gemeldet wird nur im Protokoll.');
+        return false;
+    }
+    notify_ext(array(
+        'PACKAGE'  => ak_paths()['plugin'],
+        'NAME'     => 'Anker SOLIX',
+        'MESSAGE'  => (string) $text,
+        'SEVERITY' => 4,
+    ));
+    return true;
+}
+
+/**
+ * Einen Befehl bei der Wache anmelden. Faellt offen aus (Kopf).
+ * $w: ak_wache_einstellungen(); $sperre: wirkt die Sperre (fuer den Text).
+ * Rueckgabe: array('merker' => ging, 'anzahl' => Schreiber im Fenster).
+ */
+function ak_wache_merken($anlage, $von, $ip, $art, $abgewiesen, array $w, $sperre = false)
+{
+    $aus = array('merker' => true, 'anzahl' => 0);
+    $nr = (int) $anlage;
+    $fenster_s = 60 * (int) $w['wache_fenster_min'];
+    $jetzt = time();
+    $f = ak_wache_datei($nr);
+    $erg = null;
+    $unlesbar = -1;
+    // Angelegt wird nur der Merker selbst, kein Ordner.
+    $fh = is_dir(dirname($f)) ? ak_wache_oeffnen($f) : false;
+    if ($fh !== false) {
+        $ende = microtime(true) + 2;
+        $gesperrt = true;
+        while (!@flock($fh, LOCK_EX | LOCK_NB)) {
+            if (microtime(true) >= $ende) {
+                $gesperrt = false;
+                break;
+            }
+            usleep(20000);
+        }
+        if ($gesperrt) {
+            $roh = (string) stream_get_contents($fh);
+            $m = $roh === '' ? array() : json_decode($roh, true);
+            if (!is_array($m)) {
+                // Unlesbar: neu beginnen - der Merker beobachtet nur.
+                $unlesbar = strlen($roh);
+                $m = array();
+            }
+            list($m2, $fenster, $melden, $neu) = ak_wache_fortschreiben($m, $von, $ip, $art, $abgewiesen, $jetzt, $fenster_s);
+            $inhalt = (string) json_encode($m2);
+            if ($inhalt !== '' && @ftruncate($fh, 0) && @rewind($fh)
+                    && @fwrite($fh, $inhalt) === strlen($inhalt) && @fflush($fh)) {
+                $erg = array($fenster, $melden, $neu);
+            }
+            @flock($fh, LOCK_UN);
+        }
+        @fclose($fh);
+    }
+    if ($unlesbar >= 0) {
+        // Eine Zeile, danach ist er wieder lesbar (kein Dauerprotokoll).
+        ak_wache_log('Schreiber-Wache (Anlage ' . $nr . '): der Merker ' . $f . ' war unlesbar ('
+            . $unlesbar . ' Byte) und beginnt neu.', 'WARNING');
+    }
+    if ($erg === null) {
+        $aus['merker'] = false;
+        ak_wache_zustand('merker' . $nr, true, 'Schreiber-Wache (Anlage ' . $nr . '): der Merker ' . $f
+            . ' laesst sich nicht oeffnen, sperren oder schreiben - die Befehle gehen weiter hinaus, nur das '
+            . 'Melden mehrerer Schreiber faellt aus, bis das behoben ist. Pruefen: Datenordner, Platz und '
+            . 'Eigentuemer (loxberry).', '');
+        return $aus;
+    }
+    ak_wache_zustand('merker' . $nr, false, '', 'Schreiber-Wache (Anlage ' . $nr . '): der Merker ist wieder lesbar.');
+    list($fenster, $melden, $neu) = $erg;
+    $aus['anzahl'] = count($fenster);
+    if ($melden) {
+        $text = 'Schreiber-Wache (Anlage ' . $nr . '): ' . count($fenster) . ' Schreiber in den letzten '
+              . (int) $w['wache_fenster_min'] . ' min - ' . ak_wache_text($fenster)
+              . ($sperre ? '.' : ((int) $w['wache_sperren_ein'] === 1
+                  ? '. Nichts abgewiesen (Sperre wirkt nicht, Liste unbrauchbar).'
+                  : '. Nichts abgewiesen (Sperren aus).'));
+        ak_wache_log($text, 'WARNING');
+        // Erst nach fclose: die Meldung haelt den Merker nie.
+        if ($neu && (int) $w['wache_lb_melden'] === 1) {
+            ak_wache_lb_melden($text);
+        }
+    }
+    return $aus;
+}
+
+/** Die Schreiber einer Anlage fuer den Reiter Test, neueste zuerst.
+ *  Rueckgabe array(zustand, eintraege): 'ok' | 'leer' (kein Befehl in 24 h oder seit
+ *  der letzten Aktualisierung) | 'merker' (nicht lesbar). */
+function ak_wache_lesen($anlage)
+{
+    $f = ak_wache_datei($anlage);
+    clearstatcache(true, $f);
+    if (!file_exists($f)) {
+        return array('leer', array());
+    }
+    $fh = ak_wache_oeffnen($f, 'r');
+    if ($fh === false) {
+        return array('merker', array());
+    }
+    $ende = microtime(true) + 2;
+    $ok = true;
+    while (!@flock($fh, LOCK_SH | LOCK_NB)) {
+        if (microtime(true) >= $ende) {
+            $ok = false;
+            break;
+        }
+        usleep(20000);
+    }
+    $roh = $ok ? (string) stream_get_contents($fh) : '';
+    if ($ok) {
+        @flock($fh, LOCK_UN);
+    }
+    @fclose($fh);
+    $m = ($ok && $roh !== '') ? json_decode($roh, true) : ($ok ? array() : null);
+    if (!is_array($m)) {
+        return array('merker', array());
+    }
+    $aus = array();
+    $liste = (isset($m['schreiber']) && is_array($m['schreiber'])) ? $m['schreiber'] : array();
+    foreach ($liste as $x) {
+        if (!is_array($x) || !isset($x['zuletzt'], $x['n']) || abs(time() - (int) $x['zuletzt']) > AK_WACHE_AUFBEWAHREN_S) {
+            continue;
+        }
+        $aus[] = array('von' => isset($x['von']) && is_string($x['von']) ? $x['von'] : '',
+                       'ip' => isset($x['ip']) && is_string($x['ip']) ? $x['ip'] : '',
+                       'erst' => (int) (isset($x['erst']) ? $x['erst'] : 0), 'zuletzt' => (int) $x['zuletzt'],
+                       'n' => (int) $x['n'], 'abgewiesen' => (int) (isset($x['abgewiesen']) ? $x['abgewiesen'] : 0),
+                       'art' => isset($x['art']) && is_string($x['art']) ? $x['art'] : '');
+    }
+    usort($aus, function ($a, $b) {
+        return $b['zuletzt'] - $a['zuletzt'];
+    });
+    return array($aus ? 'ok' : 'leer', $aus);
+}
+
+/** Die Anlagen, ueber die der Reiter Test urteilt: die erkannten und jede, fuer die
+ *  ein Merker liegt (ein Befehl an eine unbekannte Anlage wird auch gemerkt). */
+function ak_wache_anlagen()
+{
+    $nr = array();
+    foreach (array_keys(ak_anlagen()) as $k) {
+        if (preg_match('/^[0-9]{1,2}\z/', (string) $k)) {
+            $nr[(int) $k] = true;
+        }
+    }
+    $g = @glob(ak_paths()['datadir'] . '/schreiber_anlage*.json');
+    foreach (is_array($g) ? $g : array() as $f) {
+        if (preg_match('/schreiber_anlage([0-9]{1,2})\.json\z/', $f, $m)) {
+            $nr[(int) $m[1]] = true;
+        }
+    }
+    $aus = array_keys($nr);
+    sort($aus);
+    return $aus;
+}
+
+/**
+ * Die Wache fuer einen Befehl des Endpunkts (Reihenfolge dort: Token, Aktion,
+ * Parameter samt von, Freigabe 403, Dienst 503, WACHE, Gleichwert, Einreihen).
+ * Merkt und meldet; mit "Fremde Schreiber abweisen" urteilt sie ueber 409.
+ * Rueckgabe: array('abweisen' => bool, 'zusatz' => ';SCHREIBER=n' ab zwei Schreibern
+ * im Fenster und ';WACHE=MERKER', wenn das Merken nicht ging, 'schreiber' => Name).
+ */
+function ak_wache_anwenden($aktion, $wert, $anlage, $von)
+{
+    $aus = array('abweisen' => false, 'zusatz' => '', 'schreiber' => '');
+    if (!in_array((string) $aktion, ak_wache_aktionen(), true)) {
+        return $aus;
+    }
+    $w = ak_wache_einstellungen(ak_config(false));
+    $ip = ak_wache_absender();
+    $nr = (int) $anlage;
+    list($aktiv, $erlaubt, $fehler) = ak_wache_sperre_urteil($w, $von, $ip);
+    if ($w['wache_sperren_ein'] === 1) {
+        ak_wache_zustand('liste', $fehler !== '', 'Schreiber-Wache: Fremde Schreiber abweisen ist eingeschaltet, '
+            . 'aber die Liste der erlaubten Schreiber ist leer oder unbrauchbar - die Sperre wirkt NICHT, bis die '
+            . 'Liste im Reiter Einstellungen berichtigt ist.',
+            'Schreiber-Wache: die Liste der erlaubten Schreiber ist wieder brauchbar, die Sperre wirkt.');
+    }
+    $abweisen = $aktiv && !$erlaubt && !ak_wache_ruecknahme($aktion, $wert);
+    $aus['schreiber'] = ak_wache_name(array('von' => (string) $von, 'ip' => $ip));
+    if ($w['wache_ein'] === 1) {
+        $m = ak_wache_merken($nr, (string) $von, $ip, (string) $aktion, $abweisen, $w, $aktiv);
+        if ($m['anzahl'] > 1) {
+            $aus['zusatz'] .= ';SCHREIBER=' . (int) $m['anzahl'];
+        }
+        if (!$m['merker']) {
+            $aus['zusatz'] .= ';WACHE=MERKER';
+        }
+    }
+    if ($abweisen) {
+        $aus['abweisen'] = true;
+        ak_log_wenn_neu('wache_409_' . $nr, 'Schreiber-Wache (Anlage ' . $nr . '): ' . $aktion . ' von '
+            . $aus['schreiber'] . ' mit HTTP 409 abgewiesen - der Schreiber steht nicht in der Liste der '
+            . 'erlaubten Schreiber (' . $w['wache_erlaubt'] . '). Nichts wurde eingereiht.', 600);
+    }
+    return $aus;
+}
+
 /* ---------------- Befehlswarteschlange ----------------
  *
  * Sowohl der Miniserver-Endpunkt als auch der Reiter Test setzen Befehle ueber
@@ -2244,7 +2843,15 @@ function ak_vo_vorlage($nummer = 1)
     foreach ($befehle as $c) {
         // Der Platzhalter <v> darf NICHT durch rawurlencode laufen - Loxone
         // ersetzt ihn woertlich. Deshalb wird er hinter der Adresse angehaengt.
-        $adr = ak_adresse($c[1], false) . ($c[2] !== '' ? '&' . $c[2] : '');
+        /* Energie-1 C1: jeder Sollwert-Befehl traegt von=loxone, damit die
+         * Schreiber-Wache den Miniserver von anderen Schreibern unterscheidet. Nicht
+         * der Abruf: die Wache sieht ihn nicht (kein Sollwert). Wer die Vorlage
+         * nicht anpasst, erscheint dort als "ohne Kennung" - kein Fehler. */
+        $ak_vp = $c[1];
+        if ($ak_vp['aktion'] !== 'abruf') {
+            $ak_vp['von'] = 'loxone';
+        }
+        $adr = ak_adresse($ak_vp, false) . ($c[2] !== '' ? '&' . $c[2] : '');
         $o .= "\t" . '<VirtualOutCmd Title="' . ak_x($c[0]) . '" Comment="'
             . ak_x($vorsatz . $c[0]) . '" CmdOnMethod="GET" CmdOffMethod="GET" ';
         $o .= 'CmdOn="' . ak_x($adr) . '" ';
@@ -2497,6 +3104,9 @@ function ak_t($schluessel)
 function ak_sicherung_lesen($roh, &$namen = null)
 {
     $mangel = array();
+    // Hinweise, die das Zurueckspielen nicht verhindern (Energie-1 C1: Sicherung
+    // von vor der Schreiber-Wache). Fuenftes Element der Rueckgabe.
+    $hinweise = array();
     // X-3 (Verbesserungsbau 30.09.2026): die Namen der beanstandeten
     // Schluessel, nie ihre Werte.
     $namen = array();
@@ -2575,19 +3185,44 @@ function ak_sicherung_lesen($roh, &$namen = null)
      * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
      * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
     $fehlend = array();
+    $ak_wb = array();
     foreach (array_keys(ak_vorgaben()) as $fk) {
         if (!array_key_exists($fk, $daten)) {
+            /* Energie-1 C1: eine Sicherung von VOR der Schreiber-Wache (0.9.26/0.9.27)
+             * kennt deren Einstellungen nicht. Sie ist trotzdem vollstaendig; die
+             * geltenden Werte der Wache bleiben, und die Seite sagt es. */
+            if (in_array($fk, ak_wache_schluessel(), true)) {
+                $ak_wb[] = $fk;
+                continue;
+            }
             $fehlend[] = $fk;
         }
+    }
+    if ($ak_wb) {
+        $ak_wj = ak_config(false);
+        foreach ($ak_wb as $fk) {
+            $neu[$fk] = $ak_wj[$fk];
+        }
+        $hinweise[] = sprintf(ak_t('EINST.SICH_WACHE_BEHALTEN'), ak_e(implode(', ', $ak_wb)));
     }
     if ($fehlend) {
         $namen = array_merge($namen, $fehlend);
         $mangel[] = sprintf(ak_t('EINST.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
+    /* Energie-1 C1: Sperren an ohne erlaubten Schreiber - dieselbe Kreuzpruefung wie
+     * das Formular (ak_wache_kreuz). Nur, wenn beide Werte nicht schon einzeln
+     * beanstandet sind. */
+    if (ak_wache_kreuz($neu) && !in_array('wache_sperren_ein', $namen, true)
+        && !in_array('wache_erlaubt', $namen, true)) {
+        $mangel[] = ak_t('EINST.SICH_WACHE_KREUZ');
+        $namen[] = 'wache_sperren_ein';
+        $namen[] = 'wache_erlaubt';
+    }
     // Rueckgabe: array(Konfiguration|null, Beanstandungen, Anzahl,
-    // Zugangsdaten|null). email/passwort duerfen fehlen (aeltere Sicherung).
-    return array($mangel ? null : $neu, $mangel, $anzahl, ($mangel || !$zugang) ? null : $zugang);
+    // Zugangsdaten|null, Hinweise). email/passwort duerfen fehlen (aeltere Sicherung).
+    return array($mangel ? null : $neu, $mangel, $anzahl, ($mangel || !$zugang) ? null : $zugang,
+                 $mangel ? array() : $hinweise);
 }
 
 /**
@@ -2619,6 +3254,9 @@ function ak_sicherung_wert($k, $w)
             return (is_string($w) && preg_match('/^[A-Za-z0-9]{16,64}\z/', $w)) ? '' : ak_t('EINST.SICH_TOKEN');
         case 'anlagen_grenzen':
             return ak_sicherung_grenzen_gueltig($w) ? '' : ak_t('EINST.SICH_GRENZEN');
+        case 'wache_erlaubt':
+            // Energie-1 C1: dieselbe Zerlegung wie der Endpunkt (ak_wache_liste()).
+            return ak_wache_liste_mangel($w);
     }
     // Ein kuenftiger Schluessel ohne eigene Regel: wenigstens der Typ der Vorgabe.
     $v = ak_vorgaben();
@@ -2740,9 +3378,13 @@ function ak_eingabe_felder($form)
                               'takt_prognose', 'endpunkt_limit', 'anfrage_pause', 'anfrage_frist',
                               'verlauf_tage', 'energie_tage', 'hauslast_min', 'hauslast_max',
                               'schreibbremse', 'schrittweite', 'rueckfall_min', 'rueckfall_modus',
-                              'wartezeit', 'melden_alter'),
+                              'wartezeit', 'melden_alter',
+                              // Energie-1 C1, Schreiber-Wache
+                              'wache_fenster_min', 'wache_erlaubt'),
             'haken'  => array('ohne_details', 'ohne_energie', 'ohne_prognose', 'zaehler_ein',
-                              'steuerung_ein', 'melden_ein'),
+                              'steuerung_ein', 'melden_ein',
+                              // Energie-1 C1, Schreiber-Wache
+                              'wache_ein', 'wache_lb_melden', 'wache_sperren_ein'),
             // Grenzen je Anlage: gmin_<nr>, gmax_<nr>
             'muster' => '/^g(min|max)_[1-9][0-9]?\z/',
         ),

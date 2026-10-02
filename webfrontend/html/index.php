@@ -45,6 +45,19 @@
  * an dem der Dienst den Rueckfall misst (ak_sollwert_empfangen_vermerken()).
  * Abgewiesene Aufrufe (Token, Parameter, Steuerung aus, OK=0) setzen ihn nicht.
  *
+ * Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25, 02.10.2026):
+ *   von=<kennung>  an einem Sollwert-Befehl (hauslast, modus, reserve,
+ *               einspeisung, einspeisegrenze, notstromreserve, pvlimit), optional
+ *               (die Vorlage setzt von=loxone); gemerkt wird Kennung@Absender je
+ *               Anlage. Eine ungueltige Kennung: HTTP 400 GRUND=VON, nichts
+ *               eingereiht. Mehr als ein Schreiber im Fenster (ab Werk 15 min):
+ *               Protokoll, Reiter Test, Antwort ;SCHREIBER=n - abgewiesen wird
+ *               nichts. Nur mit "Fremde Schreiber abweisen" (ab Werk aus) bekommt
+ *               ein nicht erlaubter Schreiber HTTP 409 GRUND=FREMDSCHREIBER, und
+ *               nichts wird eingereiht; modus=eigenverbrauch (Ruecknahme) nie.
+ *               Merker nicht nutzbar: der Befehl geht trotzdem, ;WACHE=MERKER.
+ *               Lesende Aktionen und abruf beachten von nicht.
+ *
  * Der Endpunkt spricht NIE selbst mit der Anker-Cloud. Lesende Aktionen
  * beantwortet er aus dem Zwischenspeicher, schaltende legt er in einer
  * Warteschlange ab, die der Dienst abarbeitet.
@@ -156,6 +169,23 @@ $ak_watt     = ak_param('watt', '/^-?[0-9]{1,5}$/', '');
 $ak_prozent  = ak_param('prozent', '/^[0-9]{1,3}$/', '');
 $ak_wert     = ak_param('wert', '/^[a-z]{1,20}$/', '');
 $ak_zeitraum = ak_param('zeitraum', '/^(tag|monat|jahr)$/', 'tag');
+
+/* Schreiber-Wache (Energie-1 C1): &von= lesen, nur an den Sollwert-Befehlen, die die
+ * Wache sieht. Fehlt es: '' (ohne Kennung). Eine Kennung, die nicht ins Muster
+ * passt (1..32 aus A-Z a-z 0-9 _ -, auch leer oder als Liste), wird abgewiesen wie
+ * ein falscher Wert - abweisen statt zurechtbiegen (Nr. 19); ein Tippfehler faellt
+ * beim Einrichten auf. Eine Adresse OHNE von geht immer. Lesende Aktionen und
+ * abruf bleiben, wie sie waren. */
+$ak_von = '';
+if (in_array($ak_aktion, ak_wache_aktionen(), true) && isset($_GET['von'])) {
+    $ak_von = is_string($_GET['von']) ? (string) $_GET['von'] : '';
+    if (!ak_wache_kennung_gueltig($ak_von)) {
+        http_response_code(400);
+        echo 'SET;OK=0;AKTION=' . $ak_aktion . ";GRUND=VON;ERLAUBT=A-Z,a-z,0-9,_,-;LAENGE=1..32\n";
+        echo "Der Wert von von passt nicht ins erlaubte Muster (1 bis 32 Zeichen aus Buchstaben, Ziffern, _ und -).\n";
+        exit;
+    }
+}
 
 /* ---------------- Hilfsausgabe ---------------- */
 function ak_w($v)
@@ -401,6 +431,22 @@ if ($ak_aktion === 'pvlimit' && $ak_sn === '') {
     exit;
 }
 
+/* Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25; Kopf der Funktionen in
+ * ak_lib.php). VOR der Gleichwert-Unterdrueckung: auch ein Befehl, den sie als
+ * unveraendert beantwortet, kommt von einem Schreiber. Ein abgewiesener Befehl
+ * (409) wird nicht eingereiht und setzt den Merker "Sollwert empfangen" (Nr. 22)
+ * nicht. Gleichwert, Schrittweite und Rueckfall bleiben, wie sie waren; der
+ * Zusatz ;SCHREIBER=n / ;WACHE=MERKER haengt an jeder Antwort danach. */
+$ak_wache = ak_wache_anwenden($ak_aktion, isset($ak_befehl['wert']) ? $ak_befehl['wert'] : '', $ak_anlage, $ak_von);
+$ak_wz = $ak_wache['zusatz'];
+if ($ak_wache['abweisen']) {
+    http_response_code(409);
+    echo 'SET;OK=0;AKTION=' . $ak_aktion . ";GRUND=FREMDSCHREIBER\n";
+    echo 'Der Schreiber ' . $ak_wache['schreiber'] . ' steht nicht in der Liste der erlaubten Schreiber '
+       . "(Reiter Einstellungen, Schreiber-Wache). Nichts wurde eingereiht.\n";
+    exit;
+}
+
 /* Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026, Entscheidungen
  * Nr. 16 und 19; Vorbild EVCC 0.9.37). Erst sind Aktion und Wert geprueft
  * (oben), dann kommt die Unterdrueckung, dann das Einreihen. Der Merker bleibt
@@ -414,7 +460,7 @@ if ($ak_gw_schl !== '') {
     $ak_gw = ak_gleichwert_oeffnen();
     if ($ak_gw === false) {
         http_response_code(503);
-        echo 'SET;OK=0;AKTION=' . $ak_aktion . ";GRUND=GLEICHWERT_MERKER\n";
+        echo 'SET;OK=0;AKTION=' . $ak_aktion . ';GRUND=GLEICHWERT_MERKER' . $ak_wz . "\n";
         exit;
     }
     $ak_gw_merker = ak_gleichwert_lesen($ak_gw);
@@ -423,8 +469,8 @@ if ($ak_gw_schl !== '') {
         ak_gleichwert_schliessen($ak_gw, null);
         // Derselbe Wert wie eben gesendet: Loxone lebt (Nr. 22).
         ak_sollwert_empfangen_vermerken();
-        printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=Derselbe Wert ging vor %d s hinaus - nichts gesendet.\n",
-            $ak_aktion, $ak_seit, $ak_seit);
+        printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=Derselbe Wert ging vor %d s hinaus - nichts gesendet.%s\n",
+            $ak_aktion, $ak_seit, $ak_seit, $ak_wz);
         exit;
     }
 }
@@ -453,9 +499,9 @@ if ($ak_erg === 0) {
     http_response_code(500);
 }
 if ($ak_unveraendert) {
-    printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;MELDUNG=%s\n", $ak_aktion,
-        str_replace(array("\r", "\n", ';'), ' ', $ak_meldung));
+    printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;MELDUNG=%s%s\n", $ak_aktion,
+        str_replace(array("\r", "\n", ';'), ' ', $ak_meldung), $ak_wz);
     exit;
 }
-printf("SET;OK=%d;AKTION=%s;MELDUNG=%s\n", $ak_erg, $ak_aktion,
-    str_replace(array("\r", "\n", ';'), ' ', $ak_meldung));
+printf("SET;OK=%d;AKTION=%s;MELDUNG=%s%s\n", $ak_erg, $ak_aktion,
+    str_replace(array("\r", "\n", ';'), ' ', $ak_meldung), $ak_wz);

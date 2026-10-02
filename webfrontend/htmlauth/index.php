@@ -252,7 +252,9 @@ if ($ak_post && isset($_POST['speichern'])) {
     }
 
     foreach (array('steuerung_ein', 'zaehler_ein', 'melden_ein',
-                   'ohne_details', 'ohne_energie', 'ohne_prognose') as $ak_haken) {
+                   'ohne_details', 'ohne_energie', 'ohne_prognose',
+                   // Schreiber-Wache (Energie-1 C1)
+                   'wache_ein', 'wache_lb_melden', 'wache_sperren_ein') as $ak_haken) {
         $ak_cfg[$ak_haken] = isset($_POST[$ak_haken]) ? 1 : 0;
     }
 
@@ -262,6 +264,31 @@ if ($ak_post && isset($_POST['speichern'])) {
         $ak_beanstandet[] = 'rueckfall_modus';
     } else {
         $ak_cfg['rueckfall_modus'] = $ak_rm;
+    }
+
+    /* Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25). Das Fenster laeuft oben
+     * mit den Zahlen (ak_zahlgrenzen), die drei Haken mit den Haken. Die Liste der
+     * erlaubten Schreiber: abgewiesen statt zurechtgebogen (Nr. 16/19) - nichts
+     * wird gespeichert, das Feld ist markiert, die Eingabe kommt zurueck (X-2). Still
+     * bleibt nur Leerraum am Rand. Dieselbe Pruefung wie beim Zurueckspielen
+     * (ak_wache_liste_mangel, ak_wache_kreuz). */
+    $ak_wer_roh = isset($_POST['wache_erlaubt']) ? $_POST['wache_erlaubt'] : '';
+    $ak_wer = is_string($ak_wer_roh) ? trim($ak_wer_roh) : '';
+    $ak_wef = ak_wache_liste_mangel(is_string($ak_wer_roh) ? $ak_wer : $ak_wer_roh);
+    if (is_string($ak_wer_roh) && strlen($ak_wer) > 512) {
+        $ak_fehler[] = ak_t('EINST.FEHLER_WACHE_LANG');
+        $ak_beanstandet[] = 'wache_erlaubt';
+    } elseif ($ak_wef !== '') {
+        list(, $ak_wteile) = is_string($ak_wer_roh) ? ak_wache_liste($ak_wer) : array(array(), array());
+        $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_WACHE_LISTE'),
+            ak_e(implode(', ', array_slice($ak_wteile ? $ak_wteile : array('?'), 0, 4))));
+        $ak_beanstandet[] = 'wache_erlaubt';
+    } elseif (ak_wache_kreuz(array('wache_sperren_ein' => $ak_cfg['wache_sperren_ein'], 'wache_erlaubt' => $ak_wer))) {
+        $ak_fehler[] = ak_t('EINST.FEHLER_WACHE_LEER');
+        $ak_beanstandet[] = 'wache_sperren_ein';
+        $ak_beanstandet[] = 'wache_erlaubt';
+    } else {
+        $ak_cfg['wache_erlaubt'] = $ak_wer;
     }
 
     /* Grenzen je Anlage. Ein gemeinsames Maximum fuer eine Solarbank E1600
@@ -501,8 +528,10 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
     } elseif ((int) $_FILES['ak_sicherung']['size'] > 262144) {
         $ak_fehler[] = ak_t('EINST.SICH_ZU_GROSS');
     } else {
-        list($ak_neu, $ak_mangel, $ak_n, $ak_zneu) = ak_sicherung_lesen(
-            (string) @file_get_contents($_FILES['ak_sicherung']['tmp_name']));
+        $ak_sl = ak_sicherung_lesen((string) @file_get_contents($_FILES['ak_sicherung']['tmp_name']));
+        list($ak_neu, $ak_mangel, $ak_n, $ak_zneu) = $ak_sl;
+        // Energie-1 C1: Hinweise (etwa "Sicherung von vor der Schreiber-Wache").
+        $ak_shinweise = isset($ak_sl[4]) && is_array($ak_sl[4]) ? $ak_sl[4] : array();
         if ($ak_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
              * nichts. */
@@ -516,6 +545,9 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
             $ak_fehler[] = ak_t('EINST.FEHLER_ZUGANG_SPEICHERN');
         } elseif (ak_config_speichern($ak_neu)) {
             $ak_meldungen[] = sprintf(ak_t('EINST.SICH_UEBERNOMMEN'), $ak_n);
+            foreach ($ak_shinweise as $ak_sh) {
+                $ak_meldungen[] = $ak_sh;
+            }
         } else {
             $ak_fehler[] = ak_t('EINST.SICH_SCHREIBFEHLER');
         }
@@ -932,6 +964,41 @@ if ($ak_rahmen) {
   <div class="sm-hilfe"><?= ak_t('EINST.H_WARTEZEIT') ?></div>
 </div>
 
+<?php /* Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25): melden ab Werk an,
+         sperren ab Werk aus. Steht immer da - gemerkt wird nur, was der Endpunkt
+         annimmt, und das setzt "Schreibende Befehle zulassen" voraus. */ ?>
+<h3><?= ak_e(ak_t('EINST.H_WACHE')) ?></h3>
+<div class="sm-hilfe"><?= ak_t('EINST.H_WACHE_TEXT') ?></div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="wache_ein" value="1"<?= ak_markierung('wache_ein') ?> <?= ak_eingabe_an('settings', 'wache_ein', !empty($ak_cfg['wache_ein'])) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('EINST.L_WACHE_EIN')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label for="wache_fenster_min"><?= ak_e(ak_t('EINST.L_WACHE_FENSTER_MIN')) ?></label>
+  <input data-role="none" type="number" id="wache_fenster_min" name="wache_fenster_min" value="<?= ak_e(ak_eingabe('settings', 'wache_fenster_min', (string) $ak_cfg['wache_fenster_min'])) ?>"<?= ak_markierung('wache_fenster_min') ?> min="1" max="120">
+  <div class="sm-hilfe"><?= ak_t('EINST.H_WACHE_FENSTER') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="wache_lb_melden" value="1"<?= ak_markierung('wache_lb_melden') ?> <?= ak_eingabe_an('settings', 'wache_lb_melden', !empty($ak_cfg['wache_lb_melden'])) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('EINST.L_WACHE_LB')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="wache_sperren_ein" value="1"<?= ak_markierung('wache_sperren_ein') ?> <?= ak_eingabe_an('settings', 'wache_sperren_ein', !empty($ak_cfg['wache_sperren_ein'])) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('EINST.L_WACHE_SPERREN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= ak_t('EINST.H_WACHE_SPERREN') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="wache_erlaubt"><?= ak_e(ak_t('EINST.L_WACHE_ERLAUBT')) ?></label>
+  <input data-role="none" type="text" id="wache_erlaubt" name="wache_erlaubt" value="<?= ak_e(ak_eingabe('settings', 'wache_erlaubt', (string) $ak_cfg['wache_erlaubt'])) ?>"<?= ak_markierung('wache_erlaubt') ?> placeholder="loxone">
+  <div class="sm-hilfe"><?= ak_t('EINST.H_WACHE_ERLAUBT') ?></div>
+</div>
+
 <h2><?= ak_e(ak_t('EINST.H_MELDEN')) ?></h2>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
@@ -1187,23 +1254,25 @@ if ($ak_rahmen) {
 <table class="sm-tbl">
 <tr><th><?= ak_e(ak_t('ALLG.EIGENSCHAFT')) ?></th><th><?= ak_e(ak_t('ALLG.WERT')) ?></th></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_ADRESSE')) ?></td><td><span class="sm-mono">http://<?= ak_e($ak_host) ?></span></td></tr>
+<?php /* Energie-1 C1: wie die Vorlage mit von=loxone (Schreiber-Wache). */ ?>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_HAUSLAST')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'hauslast', 'anlage' => 1), false)) ?>&amp;watt=&lt;v&gt;</span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'hauslast', 'anlage' => 1, 'von' => 'loxone'), false)) ?>&amp;watt=&lt;v&gt;</span></td></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_MODUS')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'modus', 'anlage' => 1, 'wert' => 'eigenverbrauch'), false)) ?></span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'modus', 'anlage' => 1, 'wert' => 'eigenverbrauch', 'von' => 'loxone'), false)) ?></span></td></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_RESERVE')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'reserve', 'anlage' => 1), false)) ?>&amp;prozent=&lt;v&gt;</span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'reserve', 'anlage' => 1, 'von' => 'loxone'), false)) ?>&amp;prozent=&lt;v&gt;</span></td></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_EINSPEISUNG')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'einspeisung', 'anlage' => 1, 'wert' => 'aus'), false)) ?></span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'einspeisung', 'anlage' => 1, 'wert' => 'aus', 'von' => 'loxone'), false)) ?></span></td></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_GRENZE')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'einspeisegrenze', 'anlage' => 1), false)) ?>&amp;watt=&lt;v&gt;</span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'einspeisegrenze', 'anlage' => 1, 'von' => 'loxone'), false)) ?>&amp;watt=&lt;v&gt;</span></td></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_NOTSTROM')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'notstromreserve', 'anlage' => 1), false)) ?>&amp;prozent=&lt;v&gt;</span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'notstromreserve', 'anlage' => 1, 'von' => 'loxone'), false)) ?>&amp;prozent=&lt;v&gt;</span></td></tr>
 <tr><td><?= ak_e(ak_t('LOX.T_VA_PVLIMIT')) ?></td>
-    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'pvlimit'), false)) ?>&amp;sn=SN&amp;watt=&lt;v&gt;</span></td></tr>
+    <td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'pvlimit', 'von' => 'loxone'), false)) ?>&amp;sn=SN&amp;watt=&lt;v&gt;</span></td></tr>
 </table>
 </div>
 <?= ak_t('LOX.S6_MODI') ?>
+<div class="sm-hinweis"><?= ak_t('LOX.VON_HINWEIS') ?></div>
 <div class="sm-warnung"><?= ak_t('LOX.S6_WARNUNG') ?></div>
 <div class="sm-warnung"><?= ak_t('LOX.S6_UNGEPRUEFT') ?></div>
 </div>
@@ -1416,6 +1485,50 @@ function ak_bausteine()
 <?php } ?>
 </table>
 </div>
+
+<?php
+/* Schreiber der letzten 24 Stunden (Energie-1 C1), je Anlage. Frisch aus den
+   Merkern gelesen (LOCK_SH), die Einstellungen aus der Datei - nicht aus der
+   X-2-Rueckfuellung. Ueber eine leere Menge wird nicht geurteilt. */
+$ak_wtw = ak_wache_einstellungen(ak_config(false));
+$ak_wtl = array();
+$ak_wtm = array();
+foreach (ak_wache_anlagen() as $ak_wnr) {
+    list($ak_wzs, $ak_wls) = ak_wache_lesen($ak_wnr);
+    if ($ak_wzs === 'merker') {
+        $ak_wtm[] = $ak_wnr;
+    }
+    foreach ($ak_wls as $ak_wx) {
+        $ak_wx['anlage'] = $ak_wnr;
+        $ak_wtl[] = $ak_wx;
+    }
+}
+usort($ak_wtl, function ($a, $b) {
+    return $b['zuletzt'] - $a['zuletzt'];
+}); ?>
+<h3><?= ak_e(ak_t('TEST.H_WACHE_TABELLE')) ?></h3>
+<?php foreach ($ak_wtm as $ak_wnr) { ?>
+<div class="sm-fehler"><?= sprintf(ak_t('TEST.A_WACHE_MERKER'), ak_e(ak_wache_datei($ak_wnr))) ?></div>
+<?php } ?>
+<?php if (!$ak_wtl) { ?>
+<div class="sm-hilfe"><?= ak_t('TEST.A_WACHE_TABELLE_LEER') ?></div>
+<?php } else { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('TEST.T_W_ANLAGE')) ?></th><th><?= ak_e(ak_t('TEST.T_W_KENNUNG')) ?></th><th><?= ak_e(ak_t('TEST.T_W_ABSENDER')) ?></th><th><?= ak_e(ak_t('TEST.T_W_ZUERST')) ?></th><th><?= ak_e(ak_t('TEST.T_W_ZULETZT')) ?></th><th><?= ak_e(ak_t('TEST.T_W_ANZAHL')) ?></th><th><?= ak_e(ak_t('TEST.T_W_ABGEWIESEN')) ?></th><th><?= ak_e(ak_t('TEST.T_W_FENSTER')) ?></th></tr>
+<?php foreach ($ak_wtl as $ak_wx) { ?>
+<tr><td><?= (int) $ak_wx['anlage'] ?></td>
+    <td><?= $ak_wx['von'] !== '' ? '<span class="sm-mono">' . ak_e($ak_wx['von']) . '</span>' : ak_e(ak_t('TEST.W_OHNE_KENNUNG')) ?></td>
+    <td><span class="sm-mono"><?= ak_e($ak_wx['ip'] !== '' ? $ak_wx['ip'] : '?') ?></span></td>
+    <td><?= ak_e(date('d.m. H:i:s', $ak_wx['erst'])) ?></td>
+    <td><?= ak_e(date('d.m. H:i:s', $ak_wx['zuletzt'])) ?></td>
+    <td><?= (int) $ak_wx['n'] ?></td>
+    <td><?= (int) $ak_wx['abgewiesen'] ?></td>
+    <td><?= ak_e(ak_t(abs(time() - $ak_wx['zuletzt']) < 60 * $ak_wtw['wache_fenster_min'] ? 'TEST.W_JA' : 'TEST.W_NEIN')) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } ?>
 
 <h3><?= ak_e(ak_t('TEST.H_LESEN')) ?></h3>
 <div class="sm-legende">
