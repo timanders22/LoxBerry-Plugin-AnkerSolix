@@ -16,6 +16,27 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.28
+
+Eingaben mit angehängtem Zeilenumbruch werden abgewiesen (Verbesserungsliste Anker-k1).
+Gemessen am ganzen Endpunkt, an der Oberfläche über
+`php -S` und an den Bibliotheksfunktionen, je unter PHP 7.4 und 8.5 (Windows, eigene Attrappen); nicht am Gerät,
+nicht an einer Anlage.
+
+* **Ein Wert mit angehängtem Zeilenumbruch wird abgewiesen.** Bisher ging z. B. `watt=100%0A` als 100 durch, weil
+  die Muster des Endpunkts auf `$` endeten; das passt auch vor einem abschließenden Zeilenumbruch. Jetzt antwortet der
+  Endpunkt mit HTTP 400 `FEHLER;OK=0;GRUND=PARAMETER`, wie bei jedem anderen Wert außerhalb des Musters. Das gilt für
+  alle sechs Parameter: `anlage`, `sn`, `watt`, `prozent`, `wert`, `zeitraum`.
+* Gültige Werte antworten unverändert, Byte für Byte gleich wie vorher (gemessen an sechs Adressen).
+* **Auch im Reiter Test** wird ein Wert mit angehängtem Zeilenumbruch abgewiesen und das Feld markiert, statt den
+  Befehl einzureihen. Bisher ging z. B. `eigenverbrauch` mit Zeilenumbruch als Betriebsart in die Warteschlange.
+  Das gilt für Anlage, Watt, Prozent und Modus.
+* Dieselbe Strenge gilt für die übrigen Prüfungen der Oberfläche und der Bibliothek: Verlaufstag, Vorlagennummer,
+  Einstellungen, gespeicherte Merker und Dateinamen. Dort ändert sich für den Nutzer nichts, weil die Werte schon
+  vorher getrimmt wurden oder keinen Umbruch tragen können.
+
+**In Loxone:** Nichts zu ändern; eine Adresse, die Loxone selbst zusammensetzt, trägt keinen Zeilenumbruch.
+
 ## Version 0.9.27
 
 Schreiber-Wache (Energie-1, Entscheidung 25).

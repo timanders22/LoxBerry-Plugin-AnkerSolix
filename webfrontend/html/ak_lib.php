@@ -723,7 +723,7 @@ function ak_upgrade_laeuft()
         return false;
     }
     $roh = trim((string) $roh);
-    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+    if (!preg_match('/^[0-9]{1,12}\z/', $roh)) {
         return false;
     }
     $alter = time() - (int) $roh;
@@ -1138,7 +1138,7 @@ function ak_abruf_bremse()
         return -1;
     }
     $roh = trim((string) stream_get_contents($fh));
-    $letzt = preg_match('/^[0-9]{1,12}$/', $roh) ? (int) $roh : 0;
+    $letzt = preg_match('/^[0-9]{1,12}\z/', $roh) ? (int) $roh : 0;
     $jetzt = time();
     $rest = $letzt > 0 ? min($abstand, $letzt + $abstand - $jetzt) : 0;
     if ($rest > 0) {
@@ -1352,7 +1352,7 @@ function ak_sollwert_empfangen()
         return 0;
     }
     $roh = trim((string) @file_get_contents($f));
-    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+    if (!preg_match('/^[0-9]{1,12}\z/', $roh)) {
         return 0;
     }
     $t = (int) $roh;
@@ -2045,7 +2045,7 @@ function ak_verlauf_lesen($nummer, $tag = '')
     if ($tag === '') {
         $tag = date('Ymd');
     }
-    if (!preg_match('/^[0-9]{8}$/', (string) $tag)) {
+    if (!preg_match('/^[0-9]{8}\z/', (string) $tag)) {
         return array();
     }
     $f = ak_paths()['datadir'] . '/verlauf/anlage' . (int) $nummer . '_' . $tag . '.csv';
@@ -2074,7 +2074,7 @@ function ak_verlauf_tage($nummer)
     $ordner = ak_paths()['datadir'] . '/verlauf';
     $tage = array();
     foreach (glob($ordner . '/anlage' . (int) $nummer . '_*.csv') ?: array() as $f) {
-        if (preg_match('/_([0-9]{8})\.csv$/', $f, $m)) {
+        if (preg_match('/_([0-9]{8})\.csv\z/', $f, $m)) {
             $tage[] = $m[1];
         }
     }
@@ -2100,7 +2100,7 @@ function ak_energie_lesen($nummer, $von = '', $bis = '')
     }
     foreach (file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array() as $zeile) {
         $c = explode(';', $zeile);
-        if (count($c) < 7 || !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $c[0])) {
+        if (count($c) < 7 || !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}\z/', $c[0])) {
             continue;
         }
         if ($von !== '' && $c[0] < $von) { continue; }

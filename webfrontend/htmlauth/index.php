@@ -186,7 +186,7 @@ if (!$ak_post_roh) {
 /* ---------------- Vorlage herunterladen ---------------- */
 if ($ak_post && isset($_POST['vorlage'])) {
     $ak_art = (string) $_POST['vorlage'];
-    $ak_nr = isset($_POST['vorlage_nr']) && preg_match('/^[0-9]{1,2}$/', (string) $_POST['vorlage_nr'])
+    $ak_nr = isset($_POST['vorlage_nr']) && preg_match('/^[0-9]{1,2}\z/', (string) $_POST['vorlage_nr'])
         ? (int) $_POST['vorlage_nr'] : 1;
     $ak_vsn = isset($_POST['vorlage_sn']) ? preg_replace('/[^A-Za-z0-9]/', '', (string) $_POST['vorlage_sn']) : '';
     $ak_datei = null;
@@ -219,7 +219,7 @@ if ($ak_post && isset($_POST['speichern'])) {
      * Ergebnis gespeichert (D"E -> DE). Jetzt nur Leerraum am Rand und
      * Grossschreibung (Darstellung); ein Feld statt Text ist kein Land. */
     $ak_land = (isset($_POST['land']) && is_string($_POST['land'])) ? strtoupper(trim($_POST['land'])) : '';
-    if (!preg_match('/^[A-Z]{2}$/', $ak_land)) {
+    if (!preg_match('/^[A-Z]{2}\z/', $ak_land)) {
         $ak_fehler[] = ak_t('EINST.FEHLER_LAND');
         $ak_beanstandet[] = 'land';
     } else {
@@ -230,7 +230,7 @@ if ($ak_post && isset($_POST['speichern'])) {
     // prueft gegen dieselbe Tabelle (B9).
     foreach (ak_zahlgrenzen() as $ak_feld => $ak_grenzen) {
         $ak_wert = isset($_POST[$ak_feld]) ? trim((string) $_POST[$ak_feld]) : '';
-        if (!preg_match('/^[0-9]+$/', $ak_wert)) {
+        if (!preg_match('/^[0-9]+\z/', $ak_wert)) {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_ZAHL'), ak_t('EINST.L_' . strtoupper($ak_feld)));
             $ak_beanstandet[] = $ak_feld;
             continue;
@@ -299,7 +299,7 @@ if ($ak_post && isset($_POST['speichern'])) {
         $ak_e1 = isset($_POST['gmin_' . $ak_nr]) ? trim((string) $_POST['gmin_' . $ak_nr]) : '';
         $ak_e2 = isset($_POST['gmax_' . $ak_nr]) ? trim((string) $_POST['gmax_' . $ak_nr]) : '';
         foreach (array('gmin_' => $ak_e1, 'gmax_' => $ak_e2) as $ak_gname => $ak_v) {
-            if ($ak_v !== '' && !preg_match('/^[0-9]{1,4}$/', $ak_v)) {
+            if ($ak_v !== '' && !preg_match('/^[0-9]{1,4}\z/', $ak_v)) {
                 $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_GRENZE_ANLAGE'), $ak_nr);
                 $ak_beanstandet[] = $ak_gname . $ak_nr;
             }
@@ -482,7 +482,7 @@ list($ak_wn, $ak_wz) = ak_waechter_stand();
 
 /* Welcher Verlaufstag wird gezeigt? Bis 0.9.6 gab es keine Auswahl - der
  * Dienst hielt bis zu 90 Tage vor, sichtbar war immer nur heute. */
-$ak_vtag = isset($_GET['tag']) && preg_match('/^[0-9]{8}$/', (string) $_GET['tag'])
+$ak_vtag = isset($_GET['tag']) && preg_match('/^[0-9]{8}\z/', (string) $_GET['tag'])
     ? (string) $_GET['tag'] : date('Ymd');
 
 // Protokoll rueckwaerts lesen, nicht die ganze Datei einlesen.

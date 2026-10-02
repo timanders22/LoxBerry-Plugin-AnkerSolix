@@ -140,6 +140,10 @@ if (!in_array($ak_aktion, array_merge($ak_lesend, $ak_schaltend), true)) {
  * Was nicht ins Muster passt, wird abgewiesen und gemeldet. Nie Zeichen
  * entfernen, nie zurechtbiegen - ein still veraenderter Wert fuehrt zu einer
  * Anlage, die etwas anderes tut, als die Adresse sagt.
+ *
+ * Jedes Muster endet auf \z, nicht auf dem Dollarzeichen: das Dollarzeichen
+ * passt auch vor einem abschliessenden Zeilenumbruch, und "100%0A" ging bis
+ * 0.9.27 als watt=100 plus Zeilenumbruch durch (K1, 02.10.2026).
  */
 function ak_param($name, $muster, $vorgabe = '')
 {
@@ -163,12 +167,12 @@ function ak_param($name, $muster, $vorgabe = '')
     return $w;
 }
 
-$ak_anlage   = ak_param('anlage', '/^[0-9]{1,2}$/', '1');
-$ak_sn       = ak_param('sn', '/^[A-Za-z0-9]{1,32}$/', '');
-$ak_watt     = ak_param('watt', '/^-?[0-9]{1,5}$/', '');
-$ak_prozent  = ak_param('prozent', '/^[0-9]{1,3}$/', '');
-$ak_wert     = ak_param('wert', '/^[a-z]{1,20}$/', '');
-$ak_zeitraum = ak_param('zeitraum', '/^(tag|monat|jahr)$/', 'tag');
+$ak_anlage   = ak_param('anlage', '/^[0-9]{1,2}\z/', '1');
+$ak_sn       = ak_param('sn', '/^[A-Za-z0-9]{1,32}\z/', '');
+$ak_watt     = ak_param('watt', '/^-?[0-9]{1,5}\z/', '');
+$ak_prozent  = ak_param('prozent', '/^[0-9]{1,3}\z/', '');
+$ak_wert     = ak_param('wert', '/^[a-z]{1,20}\z/', '');
+$ak_zeitraum = ak_param('zeitraum', '/^(tag|monat|jahr)\z/', 'tag');
 
 /* Schreiber-Wache (Energie-1 C1): &von= lesen, nur an den Sollwert-Befehlen, die die
  * Wache sieht. Fehlt es: '' (ohne Kennung). Eine Kennung, die nicht ins Muster

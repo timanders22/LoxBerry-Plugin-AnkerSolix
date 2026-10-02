@@ -205,7 +205,7 @@ function ak_pruefungen()
         $zeilen[] = ak_pruefzeile(1, ak_t('TEST.F_UPGRADE_MARKE'), ak_t('TEST.A_UPGRADE_MARKE_KEINE'));
     } else {
         $roh = trim((string) @file_get_contents($marke));
-        if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+        if (!preg_match('/^[0-9]{1,12}\z/', $roh)) {
             $zeilen[] = ak_pruefzeile(0, ak_t('TEST.F_UPGRADE_MARKE'),
                 sprintf(ak_t('TEST.A_UPGRADE_MARKE_UNLESBAR'), ak_e($marke)));
         } else {
@@ -419,7 +419,7 @@ function ak_test_aktion($aktion, &$feld = null)
 {
     $feld = '';
     $anlage = isset($_POST['test_anlage']) ? (string) $_POST['test_anlage'] : '1';
-    if (!preg_match('/^[0-9]{1,2}$/', $anlage)) {
+    if (!preg_match('/^[0-9]{1,2}\z/', $anlage)) {
         $feld = 'test_anlage';
         return array(0, ak_t('TEST.M_ANLAGE_UNGUELTIG'));
     }
@@ -438,7 +438,7 @@ function ak_test_aktion($aktion, &$feld = null)
 
         case 'hauslast_test':
             $watt = isset($_POST['test_watt']) ? (string) $_POST['test_watt'] : '';
-            if (!preg_match('/^-?[0-9]{1,5}$/', $watt)) {
+            if (!preg_match('/^-?[0-9]{1,5}\z/', $watt)) {
                 $feld = 'test_watt';
                 return array(0, ak_t('TEST.M_WATT_UNGUELTIG'));
             }
@@ -446,7 +446,7 @@ function ak_test_aktion($aktion, &$feld = null)
 
         case 'modus_test':
             $wert = isset($_POST['test_modus']) ? (string) $_POST['test_modus'] : '';
-            if (!preg_match('/^[a-z]{1,20}$/', $wert)) {
+            if (!preg_match('/^[a-z]{1,20}\z/', $wert)) {
                 $feld = 'test_modus';
                 return array(0, ak_t('TEST.M_MODUS_UNGUELTIG'));
             }
@@ -454,7 +454,7 @@ function ak_test_aktion($aktion, &$feld = null)
 
         case 'reserve_test':
             $prozent = isset($_POST['test_prozent']) ? (string) $_POST['test_prozent'] : '';
-            if (!preg_match('/^[0-9]{1,3}$/', $prozent)) {
+            if (!preg_match('/^[0-9]{1,3}\z/', $prozent)) {
                 $feld = 'test_prozent';
                 return array(0, ak_t('TEST.M_PROZENT_UNGUELTIG'));
             }
@@ -462,7 +462,7 @@ function ak_test_aktion($aktion, &$feld = null)
 
         case 'notstrom_test':
             $prozent = isset($_POST['test_prozent']) ? (string) $_POST['test_prozent'] : '';
-            if (!preg_match('/^[0-9]{1,3}$/', $prozent)) {
+            if (!preg_match('/^[0-9]{1,3}\z/', $prozent)) {
                 $feld = 'test_prozent';
                 return array(0, ak_t('TEST.M_PROZENT_UNGUELTIG'));
             }
@@ -476,7 +476,7 @@ function ak_test_aktion($aktion, &$feld = null)
 
         case 'grenze_test':
             $watt = isset($_POST['test_watt']) ? (string) $_POST['test_watt'] : '';
-            if (!preg_match('/^[0-9]{1,5}$/', $watt)) {
+            if (!preg_match('/^[0-9]{1,5}\z/', $watt)) {
                 $feld = 'test_watt';
                 return array(0, ak_t('TEST.M_WATT_UNGUELTIG'));
             }
@@ -517,7 +517,7 @@ function ak_soc_svg($punkte, $tag = '')
     // Der Bezugspunkt ist der ANGEZEIGTE Tag, nicht immer heute: sonst faellt
     // jeder Punkt eines aelteren Tages aus dem Bild, und die Grafik bliebe
     // leer, ohne dass man den Grund saehe.
-    $tag0 = ($tag !== '' && preg_match('/^[0-9]{8}$/', $tag))
+    $tag0 = ($tag !== '' && preg_match('/^[0-9]{8}\z/', $tag))
         ? strtotime(substr($tag, 0, 4) . '-' . substr($tag, 4, 2) . '-' . substr($tag, 6, 2) . ' 00:00')
         : strtotime('today 00:00');
     $svg = '<svg viewBox="0 0 ' . $w . ' ' . $h . '" style="width:100%;max-width:' . $w
