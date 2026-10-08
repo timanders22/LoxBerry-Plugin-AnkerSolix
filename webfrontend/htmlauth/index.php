@@ -769,6 +769,7 @@ if ($ak_rahmen) {
 
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?= $ak_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
+<div class="sm-hinweis"><?= ak_t('EINST.WAS_IST_DAS') ?></div>
 
 <h2><?= ak_e(ak_t('EINST.H_DIENST')) ?></h2>
 <p class="sm-hilfe"><?= ak_t('EINST.DIENST_ERKLAERUNG') ?></p>
