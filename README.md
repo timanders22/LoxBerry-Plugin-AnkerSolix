@@ -16,6 +16,16 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.30
+
+Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
+
+* **Baustein-Liste (Reiter Einbindung in Loxone):** Die Spalte „Eingänge verbinden mit“ schreibt
+  die Verbindungen ohne Pfeil: `#7` statt „I ← #7“ (erster Eingang), `I1 = #9, I2 = #10` statt
+  „I1 ← #9, I2 ← #10“, am Analogspeicher `Input = #21, Trigger = #22`. Nur #26 verweist weiter
+  in Worten auf die Eingänge aus Schritt 4. Gleiche Bausteine, gleiche Verbindungen.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Version 0.9.29
 
 Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.
