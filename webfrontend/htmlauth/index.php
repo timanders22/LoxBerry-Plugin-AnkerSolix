@@ -660,6 +660,10 @@ if ($ak_rahmen) {
    Feld nach der Umleitung rot umrandet. */
 .sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
     border: 2px solid #c62828 !important; background-color: #fff5f5; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 </style>
 <div class="sm-wrap">
 
@@ -1370,86 +1374,194 @@ if ($ak_rahmen) {
 
 <?php
 /**
- * Die komplette Baustein-Liste. Pflicht im Hausstandard.
+ * Die Baustein-Listen. Pflicht im Hausstandard.
  *
- * Anspruch: Wer die Tabelle von oben nach unten abarbeitet, hat die Funktion
- * nachgebaut, ohne nachzudenken. Loxone Config fuehrt alle Bausteine in der
- * Baustein-Suche (F5).
+ * Welle Bild 9 VOLL (0.9.31, Entscheidung des Hausherrn 11.10.2026: Vollausstattung, ein Laie
+ * soll das Maximum leicht uebernehmen koennen): zwei Seiten aus dem LoxBerry-Plugins
+ * Musterprojekt (Musterprojekt/baustein_listen.txt, Abschnitte "AnkerSolix" und "AnkerSolix
+ * Steuerung"), dort in Loxone Config gebaut und mit leitungen_setzen.py verbunden - eine Zeile =
+ * ein Baustein. Muster ist Anlage 1 (wie die Vorlagen-Knoepfe ohne Auswahl). Vorlagentitel und
+ * Namen der Vorlagen-Eingaenge und -Befehle kommen aus derselben Quelle wie die Importdateien
+ * (ak_vorlage_titel(), ak_vorlage_praefix(), ak_vo_titel(), VO.*). Bis 0.9.30 stand hier eine
+ * eigene Liste mit 30 Zeilen (Funktion ak_bausteine) samt Regelkreis mit Impulsgeber-Trick.
  *
- * Je Zeile: Nummer, Typ, Name, Parameter, woran die Eingaenge kommen.
- * Typ, Name und Parameter stehen als Sprachschluessel drin, die Eingangsspalte
- * ist symbolisch und damit sprachfrei.
+ * Je Seite: Ueberschrift, Kasten "So uebernehmen Sie diese Seite" (Schritte mit Knopf-,
+ * Vorlagen- und Einstellungsnamen der Linie), Tabelle, Hinweise, Bild, Link. Je Zeile: Typ,
+ * Name, Parameter, Eingaenge verbinden mit, Art ('vi' Eingang einer Vorlage, 'vq' Befehl der
+ * Vorlage der Steuerbefehle, '' sonst - die Art liest ak_bausteinnamen_probe() im Reiter Test).
+ * Zellen: 'BAUSTEIN.X' geht durch ak_t(), sonst Klartext (Eingaenge mit Woertern kommen schon
+ * fertig aus sprintf(ak_t(...))); ausgegeben wird jede Zelle mit ak_e(), '' als Strich.
  */
-/**
- * Die Parameterspalte einer Baustein-Zeile, die eine Befehlserkennung nennt.
- *
- * Das Muster kommt aus ak_check() - derselben Stelle, aus der die Feldtabelle
- * und die Importdatei es holen. Bis 0.9.7 stand es als freier Text in der
- * Sprachdatei (BAUSTEIN.P01…P08) und nannte es OHNE das fuehrende Semikolon,
- * waehrend der Warnkasten daneben es fuer zwingend erklaerte. Ein Suchmuster
- * in einer Sprachdatei kann dem Code nicht folgen; deshalb steht dort jetzt
- * nur noch die Beschriftung mit einem %s.
- *
- * Rueckgabe als array('text' => …), damit die Ausgabe sie NICHT durch ak_t()
- * schickt - der Wert ist bereits fertig.
- */
-function ak_muster_zelle($feld)
+function ak_bl_text($x)
 {
-    return array('text' => sprintf(ak_t('BAUSTEIN.P_BEFEHL'),
-        '<span class="sm-mono">' . ak_e(ak_check($feld)) . '</span>'));
+    return strpos((string) $x, 'BAUSTEIN.') === 0 ? ak_t($x) : (string) $x;
 }
 
-function ak_bausteine()
+/** Titel eines Befehls der Vorlage der Steuerbefehle - derselbe Text wie in ak_vo_vorlage(). */
+function ak_bl_vo($k)
 {
+    return ak_t('VO.' . $k);
+}
+
+function ak_bl_seiten()
+{
+    $vi  = sprintf(ak_t('BAUSTEIN.T_VIBEF'), ak_vorlage_titel('status', 1));
+    $vie = sprintf(ak_t('BAUSTEIN.T_VIBEF'), ak_vorlage_titel('energie', 1));
+    $vq  = sprintf(ak_t('BAUSTEIN.T_VABEF'), ak_vo_titel(1));
+    $s = ak_vorlage_praefix('status', 1) . '_';
+    $e = ak_vorlage_praefix('energie', 1) . '_';
+    $einst = ak_t('REITER.EINSTELLUNGEN');
     return array(
-        array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', ak_muster_zelle('SOC'), '&mdash;'),
-        array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', ak_muster_zelle('PV'), '&mdash;'),
-        array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', ak_muster_zelle('BATP'), '&mdash;'),
-        array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', ak_muster_zelle('HAUS'), '&mdash;'),
-        array(5,  'BAUSTEIN.T_VE',      'BAUSTEIN.N05', ak_muster_zelle('NETZBEZUG'), '&mdash;'),
-        array(6,  'BAUSTEIN.T_VE',      'BAUSTEIN.N06', ak_muster_zelle('NETZEINSP'), '&mdash;'),
-        array(7,  'BAUSTEIN.T_VE',      'BAUSTEIN.N07', ak_muster_zelle('ALTER'), '&mdash;'),
-        array(8,  'BAUSTEIN.T_VE',      'BAUSTEIN.N08', ak_muster_zelle('OK'), '&mdash;'),
-        array(9,  'BAUSTEIN.T_SWS',     'BAUSTEIN.N09', 'BAUSTEIN.P09', '#7'),
-        array(10, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N10', '',             '#8'),
-        array(11, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N11', '',             'I1 = #9, I2 = #10'),
-        array(12, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N12', 'BAUSTEIN.P12', '#11'),
-        array(13, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N13', 'BAUSTEIN.P13', '#12'),
-        array(14, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N14', 'BAUSTEIN.P14', '#1'),
-        array(15, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N15', 'BAUSTEIN.P15', 'I1 = #1, I2 = #3'),
-        array(16, 'BAUSTEIN.T_VEZ',     'BAUSTEIN.N16', 'BAUSTEIN.P16', '&mdash;'),
-        array(17, 'BAUSTEIN.T_VERGL',   'BAUSTEIN.N17', 'BAUSTEIN.P17', 'I1 = #1, I2 = #16'),
-        array(18, 'BAUSTEIN.T_FORMEL',  'BAUSTEIN.N18', 'BAUSTEIN.P18', 'I1 = #5'),
-        array(19, 'BAUSTEIN.T_FORMEL',  'BAUSTEIN.N19', 'BAUSTEIN.P19', 'I1 = #6'),
-        array(20, 'BAUSTEIN.T_TASTER',  'BAUSTEIN.N20', 'BAUSTEIN.P20', '&mdash;'),
-        array(21, 'BAUSTEIN.T_FORMEL',  'BAUSTEIN.N21', 'BAUSTEIN.P21', 'I1 = #18, I2 = #17, I3 = #20'),
-        array(22, 'BAUSTEIN.T_IMPULS',  'BAUSTEIN.N22', 'BAUSTEIN.P22', '&mdash;'),
-        array(23, 'BAUSTEIN.T_ANALOGSP','BAUSTEIN.N23', 'BAUSTEIN.P23', 'Input = #21, ' . ak_t('BAUSTEIN.TRIGGER') . ' = #22'),
-        array(24, 'BAUSTEIN.T_FORMEL',  'BAUSTEIN.N24', 'BAUSTEIN.P24', 'I1 = #23, I2 = #22'),
-        array(25, 'BAUSTEIN.T_VA',      'BAUSTEIN.N25', 'BAUSTEIN.P25', '#24'),
-        array(26, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N26', 'BAUSTEIN.P26', 'I1..I6 &larr; ' . ak_t('BAUSTEIN.ENERGIE_VE')),
-        array(27, 'BAUSTEIN.T_VE',      'BAUSTEIN.N27', ak_muster_zelle('EINSPEISUNG'), '&mdash;'),
-        array(28, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N28', 'BAUSTEIN.P28', '#27'),
-        array(29, 'BAUSTEIN.T_VA',      'BAUSTEIN.N29', 'BAUSTEIN.P29', '#28'),
-        array(30, 'BAUSTEIN.T_VEZ',     'BAUSTEIN.N30', 'BAUSTEIN.P30', '&mdash;'),
+        array(
+        'titel'    => ak_t('LOX.BL_WERTE'),
+        'seite'    => 'AnkerSolix',
+        'bild'     => 'einbindung_loxone_werte.png',
+        'schritte' => array(
+            sprintf(ak_t('BAUSTEIN.A_S1'), ak_t('LOX.K_VORLAGE'), ak_t('LOX.K_VORLAGE_ENERGIE'),
+                ak_t('LOX.K_VORLAGE_AUSGANG')),
+            sprintf(ak_t('BAUSTEIN.A_S2'), ak_vorlage_titel('status', 1), ak_vorlage_titel('energie', 1),
+                ak_vo_titel(1)),
+            ak_t('BAUSTEIN.A_S3'),
+            ak_t('BAUSTEIN.A_S4'),
+            ak_t('BAUSTEIN.A_S5'),
+            sprintf(ak_t('BAUSTEIN.A_S6'), $einst, ak_t('EINST.L_STEUERUNG_EIN'), ak_t('EINST.L_OHNE_PROGNOSE')),
+        ),
+        'hinweise' => array('H_STATUS', 'H_ODER', 'H_VERZ', 'H_LEER', 'H_TASTEN', 'H_EINMAL'),
+        'zeilen'   => array(
+            1  => array($vi, $s . 'OK', 'BAUSTEIN.A01_P', '', 'vi'),
+            2  => array($vi, $s . 'ALTER', 'BAUSTEIN.A02_P', '', 'vi'),
+            3  => array($vi, $s . 'SOC', 'BAUSTEIN.A03_P', '', 'vi'),
+            4  => array($vi, $s . 'BATP', 'BAUSTEIN.A04_P', '', 'vi'),
+            5  => array($vi, $s . 'PV', 'BAUSTEIN.A05_P', '', 'vi'),
+            6  => array($vi, $s . 'HAUS', 'BAUSTEIN.A06_P', '', 'vi'),
+            7  => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A07_N', 'BAUSTEIN.A07_P', 'V1 = #3, V2 = #4, V3 = #5, V4 = #6', ''),
+            8  => array('BAUSTEIN.T_SWS', 'BAUSTEIN.A08_N', 'BAUSTEIN.A08_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 3), ''),
+            9  => array('BAUSTEIN.T_BENACHR', 'BAUSTEIN.A09_N', 'BAUSTEIN.P_FREI', sprintf(ak_t('BAUSTEIN.E_EIN'), 8), ''),
+            10 => array('BAUSTEIN.T_SWS', 'BAUSTEIN.A10_N', 'BAUSTEIN.A10_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 2), ''),
+            11 => array('BAUSTEIN.T_NICHT', 'BAUSTEIN.A11_N', '', 'I = #1', ''),
+            12 => array('BAUSTEIN.T_ODER', 'BAUSTEIN.A12_N', '', 'I1 = #10, I2 = #11', ''),
+            13 => array('BAUSTEIN.T_EVZ', 'BAUSTEIN.A13_N', 'BAUSTEIN.A13_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 12), ''),
+            14 => array('BAUSTEIN.T_BENACHR', 'BAUSTEIN.A14_N', 'BAUSTEIN.P_FREI', sprintf(ak_t('BAUSTEIN.E_EIN'), 13), ''),
+            15 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.A15_N', 'BAUSTEIN.P_APP', '', ''),
+            16 => array($vq, ak_bl_vo('EINSP_EIN'), 'BAUSTEIN.A16_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 15), 'vq'),
+            17 => array($vi, $s . 'NETZBEZUG', 'BAUSTEIN.A17_P', '', 'vi'),
+            18 => array($vi, $s . 'NETZEINSP', 'BAUSTEIN.A18_P', '', 'vi'),
+            19 => array($vi, $s . 'SOLL', 'BAUSTEIN.A19_P', '', 'vi'),
+            20 => array($vi, $s . 'MODUS', 'BAUSTEIN.A20_P', '', 'vi'),
+            21 => array($vi, $s . 'RESERVE', 'BAUSTEIN.A21_P', '', 'vi'),
+            22 => array($vi, $s . 'EINSPEISUNG', 'BAUSTEIN.A22_P', '', 'vi'),
+            23 => array($vi, $s . 'GRENZE', 'BAUSTEIN.A23_P', '', 'vi'),
+            24 => array($vi, $s . 'PROGNOSE', 'BAUSTEIN.A24_P', '', 'vi'),
+            25 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A25_N', 'BAUSTEIN.A25_P', 'V1 = #17, V2 = #18, V3 = #24', ''),
+            26 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A26_N', 'BAUSTEIN.A26_P', 'V1 = #20, V2 = #19', ''),
+            27 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A27_N', 'BAUSTEIN.A27_P', 'V1 = #22, V2 = #23, V3 = #21', ''),
+            28 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.A28_N', 'BAUSTEIN.A28_P', '', ''),
+            29 => array($vq, ak_bl_vo('EINSP_AUS'), 'BAUSTEIN.A29_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 28), 'vq'),
+            30 => array($vie, $e . 'OK', 'BAUSTEIN.A30_P', '', 'vi'),
+            31 => array($vie, $e . 'PV', 'BAUSTEIN.A31_P', '', 'vi'),
+            32 => array($vie, $e . 'BATLD', 'BAUSTEIN.A32_P', '', 'vi'),
+            33 => array($vie, $e . 'BATENTL', 'BAUSTEIN.A33_P', '', 'vi'),
+            34 => array($vie, $e . 'HAUS', 'BAUSTEIN.A34_P', '', 'vi'),
+            35 => array($vie, $e . 'NETZBEZUG', 'BAUSTEIN.A35_P', '', 'vi'),
+            36 => array($vie, $e . 'NETZEINSP', 'BAUSTEIN.A36_P', '', 'vi'),
+            37 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A37_N', 'BAUSTEIN.A37_P',
+                     'V1 = #31, V2 = #32, V3 = #33, V4 = #34, V5 = #35, V6 = #36, V7 = #30', ''),
+            38 => array($vie, $e . 'MPV', 'BAUSTEIN.A38_P', '', 'vi'),
+            39 => array($vie, $e . 'MHAUS', 'BAUSTEIN.A39_P', '', 'vi'),
+            40 => array($vie, $e . 'JPV', 'BAUSTEIN.A40_P', '', 'vi'),
+            41 => array($vie, $e . 'JHAUS', 'BAUSTEIN.A41_P', '', 'vi'),
+            42 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A42_N', 'BAUSTEIN.A42_P',
+                     'V1 = #38, V2 = #39, V3 = #40, V4 = #41, V5 = #30', ''),
+            43 => array('BAUSTEIN.T_FORMEL', 'BAUSTEIN.A43_N', 'BAUSTEIN.A43_P', 'I1 = #4', ''),
+            44 => array('BAUSTEIN.T_ZAEHLER_SP', 'BAUSTEIN.A44_N', 'BAUSTEIN.A44_P', 'Pf = #43, Slvl = #3', ''),
+        ),
+        ),
+        array(
+        'titel'    => ak_t('LOX.BL_STEUERUNG'),
+        'seite'    => 'AnkerSolix Steuerung',
+        'bild'     => 'einbindung_loxone_steuerung.png',
+        'schritte' => array(
+            sprintf(ak_t('BAUSTEIN.B_S1'), ak_vorlage_titel('status', 1), ak_vo_titel(1)),
+            ak_t('BAUSTEIN.B_S2'),
+            ak_t('BAUSTEIN.B_S3'),
+            ak_t('BAUSTEIN.B_S4'),
+            sprintf(ak_t('BAUSTEIN.B_S5'), $einst, ak_t('EINST.L_STEUERUNG_EIN'), ak_t('EINST.L_RUECKFALL_MIN')),
+            ak_t('BAUSTEIN.B_S6'),
+        ),
+        'hinweise' => array('H_SCHREIBBREMSE', 'H_GLEICH', 'H_RUECKFALL', 'H_EINMAL', 'H_PROZENT'),
+        'zeilen'   => array(
+            1  => array($vi, $s . 'OK', 'BAUSTEIN.B01_P', '', 'vi'),
+            2  => array($vi, $s . 'SOC', 'BAUSTEIN.B02_P', '', 'vi'),
+            3  => array($vi, $s . 'SOLL', 'BAUSTEIN.B03_P', '', 'vi'),
+            4  => array('BAUSTEIN.T_VE', 'BAUSTEIN.B04_N', 'BAUSTEIN.B04_P', '', ''),
+            5  => array('BAUSTEIN.T_VE_SCHALTER', 'BAUSTEIN.B05_N', 'BAUSTEIN.B05_P', '', ''),
+            6  => array('BAUSTEIN.T_SWS', 'BAUSTEIN.B06_N', 'BAUSTEIN.B06_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 2), ''),
+            7  => array('BAUSTEIN.T_UND', 'BAUSTEIN.B07_N', '', 'I1 = #5, I2 = #6', ''),
+            8  => array('BAUSTEIN.T_UND', 'BAUSTEIN.B08_N', 'BAUSTEIN.B08_P', 'I1 = #7, I2 = #1', ''),
+            9  => array('BAUSTEIN.T_FORMEL', 'BAUSTEIN.B09_N', 'BAUSTEIN.B09_P', 'I1 = #3, I2 = #4', ''),
+            10 => array('BAUSTEIN.T_FLANKE', 'BAUSTEIN.B10_N', 'BAUSTEIN.B10_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 8), ''),
+            11 => array($vq, ak_bl_vo('MANUELL'), 'BAUSTEIN.B11_P', sprintf(ak_t('BAUSTEIN.E_EIN_AUSGANG'), 'On', 10), 'vq'),
+            12 => array('BAUSTEIN.T_EVZ', 'BAUSTEIN.B12_N', 'BAUSTEIN.B12_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 8), ''),
+            13 => array('BAUSTEIN.T_IMPULS', 'BAUSTEIN.B13_N', 'BAUSTEIN.B13_P', '', ''),
+            14 => array('BAUSTEIN.T_UND', 'BAUSTEIN.B14_N', '', sprintf(ak_t('BAUSTEIN.E_I1A_I2'), 'Q', 13, 12), ''),
+            15 => array('BAUSTEIN.T_ANALOGSP', 'BAUSTEIN.B15_N', 'BAUSTEIN.B15_P', 'V = #9, Set = #14', ''),
+            16 => array($vq, ak_bl_vo('HAUSLAST'), 'BAUSTEIN.B16_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 15), 'vq'),
+            17 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.B17_N', 'BAUSTEIN.B17_P', '', ''),
+            18 => array('BAUSTEIN.T_ODER', 'BAUSTEIN.B18_N', 'BAUSTEIN.B18_P', sprintf(ak_t('BAUSTEIN.E_I1A_I2'), 'Off', 10, 17), ''),
+            19 => array($vq, ak_bl_vo('EIGEN'), '', sprintf(ak_t('BAUSTEIN.E_EIN'), 18), 'vq'),
+            20 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.B20_N', 'BAUSTEIN.B20_P', '', ''),
+            21 => array($vq, ak_bl_vo('SMART'), '', sprintf(ak_t('BAUSTEIN.E_EIN'), 20), 'vq'),
+            22 => array('BAUSTEIN.T_VE_REGLER', 'BAUSTEIN.B22_N', 'BAUSTEIN.B22_P', '', ''),
+            23 => array($vq, ak_bl_vo('GRENZE'), 'BAUSTEIN.B23_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 22), 'vq'),
+            24 => array('BAUSTEIN.T_VE_REGLER', 'BAUSTEIN.B24_N', 'BAUSTEIN.B24_P', '', ''),
+            25 => array($vq, ak_bl_vo('RESERVE'), 'BAUSTEIN.B23_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 24), 'vq'),
+            26 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.B26_N', 'BAUSTEIN.B26_P', '', ''),
+            27 => array($vq, ak_bl_vo('ABRUF'), '', sprintf(ak_t('BAUSTEIN.E_EIN'), 26), 'vq'),
+            28 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.B28_N', 'BAUSTEIN.B28_P', 'V1 = #8, V2 = #15, V3 = #4', ''),
+        ),
+        ),
     );
 }
 ?>
 
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S10_TITEL')) ?></b><br>
 <?= ak_t('LOX.S10_TEXT') ?>
+<?php foreach (ak_bl_seiten() as $ak_bs) { ?>
+<h3><?= ak_e($ak_bs['titel']) ?></h3>
+<div class="sm-hinweis"><b><?= ak_e(ak_t('BAUSTEIN.SO_TITEL')) ?></b>
+<ol>
+<?php foreach ($ak_bs['schritte'] as $ak_bsch) { ?>
+<li><?= $ak_bsch ?></li>
+<?php } ?>
+</ol>
+</div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= ak_e(ak_t('LOX.T_BAUSTEIN')) ?></th><th><?= ak_e(ak_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
     <th><?= ak_e(ak_t('LOX.T_PARAMETER')) ?></th><th><?= ak_e(ak_t('LOX.T_EINGAENGE')) ?></th></tr>
-<?php foreach (ak_bausteine() as $ak_b) { ?>
-<tr><td><?= (int) $ak_b[0] ?></td><td><?= ak_t($ak_b[1]) ?></td><td><?= ak_t($ak_b[2]) ?></td>
-    <td><?= is_array($ak_b[3]) ? $ak_b[3]['text']
-             : ($ak_b[3] !== '' ? ak_t($ak_b[3]) : '&mdash;') ?></td><td><?= $ak_b[4] ?></td></tr>
+<?php foreach ($ak_bs['zeilen'] as $ak_bn => $ak_b) {
+    $ak_bp = ak_bl_text($ak_b[2]);
+    $ak_be = ak_bl_text($ak_b[3]); ?>
+<tr><td><?= (int) $ak_bn ?></td><td><?= ak_e(ak_bl_text($ak_b[0])) ?></td>
+    <td><?= $ak_b[4] === 'vi' ? '<span class="sm-mono">' . ak_e(ak_bl_text($ak_b[1])) . '</span>'
+             : ak_e(ak_bl_text($ak_b[1])) ?></td>
+    <td><?= $ak_bp !== '' ? ak_e($ak_bp) : '&mdash;' ?></td>
+    <td><?= $ak_be !== '' ? ak_e($ak_be) : '&mdash;' ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<?= ak_t('LOX.S10_ERLAEUTERUNG') ?>
+<p class="sm-hilfe"><b><?= ak_e(ak_t('BAUSTEIN.H_TITEL')) ?></b></p>
+<ul class="sm-hilfe">
+<?php foreach ($ak_bs['hinweise'] as $ak_bh) { ?>
+<li><?= ak_t('BAUSTEIN.' . $ak_bh) ?></li>
+<?php } ?>
+</ul>
+<figure class="sm-bild">
+<img src="<?= ak_e($ak_bs['bild']) ?>" alt="<?= ak_e(sprintf(ak_t('LOX.BILD_ALT'), $ak_bs['titel'])) ?>" loading="lazy">
+<figcaption><?= ak_e(sprintf(ak_t('LOX.BILD_UNTERSCHRIFT'), $ak_bs['seite'])) ?></figcaption>
+</figure>
+<p class="sm-hilfe"><?= ak_t('LOX.MUSTERPROJEKT') ?></p>
+<?php } ?>
 </div>
 
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S11_TITEL')) ?></b><br>

@@ -16,6 +16,20 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.31
+
+Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt): der Reiter
+„Einbindung in Loxone“ zeigt zwei Baustein-Listen – Werte, Meldungen und Bilanz sowie die
+Hauslast-Regelung mit den Einstellungen aus der App – mit zwei Bildern und einer
+Schritt-für-Schritt-Anleitung.
+
+* **Befehlsnamen ohne „%“:** In der Vorlage der Steuerbefehle heißen „Entladegrenze setzen (%)“
+  und „Notstromreserve setzen (%)“ jetzt „Entladegrenze setzen (Proz)“ und „Notstromreserve
+  setzen (Proz)“ (englisch „(pct)“), weil Loxone Config aus „%“ im Namen „_“ macht. Wer die
+  Ausgangsvorlage schon eingelesen hat: die beiden Befehle in Config umbenennen oder die Vorlage
+  neu einlesen.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Version 0.9.30
 
 Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
@@ -631,7 +645,9 @@ in einer Warteschlange ab.
 
 ## Endpunkte für Loxone
 
-Alle Aufrufe brauchen das Token aus dem Reiter *Einbindung in Loxone*.
+Alle Aufrufe brauchen das Token aus dem Reiter *Einbindung in Loxone*. Wie die Bausteine in
+Loxone Config verdrahtet werden, zeigt derselbe Reiter mit zwei Baustein-Listen und Bildern aus
+dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt).
 
 | Aufruf | Zweck |
 |---|---|

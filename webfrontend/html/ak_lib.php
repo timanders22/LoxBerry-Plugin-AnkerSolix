@@ -2729,6 +2729,34 @@ function ak_adresse($parameter = array(), $mit_host = true)
 }
 
 /**
+ * Titel und Namensvorsatz der Vorlagen (Welle Bild 9 VOLL, 0.9.31). ak_vorlage() und
+ * ak_vo_vorlage() setzten sie bis 0.9.30 fest ein; jetzt nennen auch die Baustein-Listen im
+ * Reiter "Einbindung in Loxone" Vorlagentitel und Eingangsnamen - aus derselben Quelle wie
+ * die Importdateien. $nummer und $sn kommen schon geprueft (ak_vorlage()) bzw. als Zahl.
+ */
+function ak_vorlage_titel($satz, $nummer = 1, $sn = '')
+{
+    if ($satz === 'geraet') {
+        return 'Anker SOLIX Geraet ' . $sn;
+    }
+    return $satz === 'energie' ? 'Anker SOLIX Energie ' . $nummer : 'Anker SOLIX ' . $nummer;
+}
+
+/** Vorsatz der Eingangsnamen: ANKER_1, ANKER_E_1, ANKER_G_<SN> (dahinter _FELD). */
+function ak_vorlage_praefix($satz, $nummer = 1, $sn = '')
+{
+    return $satz === 'geraet'
+        ? 'ANKER_G_' . $sn
+        : 'ANKER_' . ($satz === 'energie' ? 'E_' : '') . $nummer;
+}
+
+/** Titel der Vorlage der Steuerbefehle (Virtueller Ausgang). */
+function ak_vo_titel($nummer = 1)
+{
+    return 'Anker SOLIX ' . (int) $nummer . ' steuern (LoxBerry-Plugin)';
+}
+
+/**
  * Vorlage fuer den Import in Loxone Config.
  *
  * $satz: 'status' | 'energie' | 'geraet'.
@@ -2740,9 +2768,7 @@ function ak_vorlage($satz = 'status', $nummer = 1, $sn = '')
     $nummer = max(1, min(99, (int) $nummer));
     $sn = preg_replace('/[^A-Za-z0-9]/', '', (string) $sn);
     $cmds = array();
-    $praefix = $satz === 'geraet'
-        ? 'ANKER_G_' . $sn
-        : 'ANKER_' . ($satz === 'energie' ? 'E_' : '') . $nummer;
+    $praefix = ak_vorlage_praefix($satz, $nummer, $sn);
     foreach (ak_felder_zeile($satz) as $feld => $info) {
         // Der Text laeuft gleich durch ak_x() und wuerde dort ein zweites Mal
         // maskiert. Deshalb erst Auszeichnung entfernen und Entitaeten
@@ -2777,17 +2803,17 @@ function ak_vorlage($satz = 'status', $nummer = 1, $sn = '')
     }
     if ($satz === 'geraet') {
         $adresse = ak_adresse(array('aktion' => 'geraet', 'sn' => $sn));
-        $titel = 'Anker SOLIX Geraet ' . $sn;
+        $titel = ak_vorlage_titel('geraet', $nummer, $sn);
         $takt = '60';
         $name = 'ankersolix_geraet_' . $sn . '.xml';
     } elseif ($satz === 'energie') {
         $adresse = ak_adresse(array('aktion' => 'energie', 'anlage' => $nummer));
-        $titel = 'Anker SOLIX Energie ' . $nummer;
+        $titel = ak_vorlage_titel('energie', $nummer);
         $takt = '300';
         $name = 'ankersolix_energie' . $nummer . '.xml';
     } else {
         $adresse = ak_adresse(array('aktion' => 'status', 'anlage' => $nummer));
-        $titel = 'Anker SOLIX ' . $nummer;
+        $titel = ak_vorlage_titel('status', $nummer);
         $takt = '60';
         $name = 'ankersolix_anlage' . $nummer . '.xml';
     }
@@ -2816,7 +2842,7 @@ function ak_vo_vorlage($nummer = 1)
     $nummer = max(1, min(99, (int) $nummer));
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualOut HintText="" Title="Anker SOLIX ' . $nummer . ' steuern (LoxBerry-Plugin)" '
+    $o .= '<VirtualOut HintText="" Title="' . ak_vo_titel($nummer) . '" '
         . 'Comment="Steuerbefehle über das Plugin ' . ak_x($p['plugin'])
         . ' - ENTHÄLT DAS AKTIONSTOKEN, nicht weitergeben. Loxone Config legt beim '
         . 'Import neu an und überschreibt nichts." '

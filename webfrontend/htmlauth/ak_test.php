@@ -123,6 +123,14 @@ function ak_vorlage_probe()
 }
 
 /**
+ * Heissen die Vorlagen-Eingaenge und -Befehle der Baustein-Listen so wie nach dem Import?
+ *
+ * Welle Bild 9 VOLL (0.9.31): die Listen im Reiter "Einbindung in Loxone" nennen keine
+ * Suchmuster mehr (die stehen in Schritt 3/4 und in der Importdatei), sondern die Namen, die
+ * Config nach dem Import zeigt. Diese Zeile erzeugt die drei Vorlagen der Anlage 1 und sucht
+ * jeden Vorlagen-Namen der Listen darin. Sie loest die Semikolon-Probe der alten Liste ab
+ * (ak_bausteinmuster_probe(), Lehre aus 0.9.7 - deren Vorgeschichte folgt):
+ *
  * Traegt jedes Suchmuster, das die Oberflaeche zum Abschreiben anzeigt, das
  * fuehrende Semikolon?
  *
@@ -132,26 +140,34 @@ function ak_vorlage_probe()
  * gefunden, kein Werkzeug dieses Plugins. Diese Zeile schliesst die Luecke:
  * sie sieht sich die FERTIG GERENDERTE Tabelle an, nicht den Quelltext.
  */
-function ak_bausteinmuster_probe()
+function ak_bausteinnamen_probe()
 {
-    $ohne = array();
-    $mit = 0;
-    foreach (ak_bausteine() as $b) {
-        $text = is_array($b[3]) ? $b[3]['text'] : ak_t($b[3]);
-        if (preg_match_all('/\\\\i(;?)([A-Z_]{2,})=/', $text, $t, PREG_SET_ORDER)) {
-            foreach ($t as $x) {
-                if ($x[1] === ';') {
-                    $mit++;
-                } else {
-                    $ohne[] = $x[2];
-                }
+    $titel = array();
+    foreach (array(ak_vorlage('status', 1), ak_vorlage('energie', 1), ak_vo_vorlage(1)) as $ak_v) {
+        if (preg_match_all('/<(?:VirtualInHttpCmd|VirtualOutCmd)\s[^>]*?Title="([^"]*)"/', $ak_v[1], $m)) {
+            foreach ($m[1] as $t) {
+                $titel[html_entity_decode($t, ENT_QUOTES | ENT_XML1, 'UTF-8')] = true;
             }
         }
     }
-    if ($ohne) {
-        return array(0, sprintf(ak_t('TEST.A_BAUSTEINMUSTER_FEHLT'), implode(', ', $ohne)));
+    $fehlt = array();
+    $n = 0;
+    foreach (ak_bl_seiten() as $seite) {
+        foreach ($seite['zeilen'] as $nr => $z) {
+            if ($z[4] === '') {
+                continue;
+            }
+            $n++;
+            $name = ak_bl_text($z[1]);
+            if (!isset($titel[$name])) {
+                $fehlt[] = $seite['seite'] . ' #' . $nr . ' ' . $name;
+            }
+        }
     }
-    return array(1, sprintf(ak_t('TEST.A_BAUSTEINMUSTER_OK'), $mit));
+    if ($fehlt || $n === 0) {
+        return array(0, sprintf(ak_t('TEST.A_BAUSTEINNAMEN_FEHLT'), ak_e($fehlt ? implode(', ', $fehlt) : '-')));
+    }
+    return array(1, sprintf(ak_t('TEST.A_BAUSTEINNAMEN_OK'), $n));
 }
 
 function ak_pruefungen()
@@ -390,8 +406,8 @@ function ak_pruefungen()
     list($stand, $text) = ak_vorlage_probe();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_VORLAGE'), $text);
 
-    list($stand, $text) = ak_bausteinmuster_probe();
-    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_BAUSTEINMUSTER'), $text);
+    list($stand, $text) = ak_bausteinnamen_probe();
+    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_BAUSTEINNAMEN'), $text);
 
     return $zeilen;
 }
