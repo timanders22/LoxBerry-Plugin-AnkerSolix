@@ -58,25 +58,19 @@ trap ak_marke_weg EXIT
 # ist auf der Release-Seite des Projekts nachgesehen, nicht geraten.
 LIBTAG="v3.6.3"
 
-# ---------- Nur einmal je Einbau (Befund Installer 2) ----------
-# LoxBerry ruft beim Upgrade postinstall UND postupgrade auf, und
-# postupgrade.sh leitet hierher weiter (Regeln/06, BatterieBMS B47): bis
-# 0.9.21 lief dieses Skript zweimal, installierte zweimal ueber pip, und der
-# zweite Lauf meldete "Der Dienst lief vor dem Upgrade nicht", obwohl der
-# erste ihn gerade gestartet hatte. Der Merker traegt Auspackordner ($1) UND
-# Fassung ($4) - ein spaeterer Einbau hat eine andere Kennung. Er liegt NEBEN
-# dem Datenordner und wird erst am Ende eines GELUNGENEN Laufs geschrieben:
-# bricht der erste Lauf ab, holt der zweite nach, was fehlt.
-EINBAU="$BASE/data/plugins/$PFOLDER.postinstall_lauf"
-KENNUNG="$(basename "${1:-ohne-tempordner}")|${4:-ohne-fassung}"
-if [ -f "$EINBAU" ] && [ "$(cat "$EINBAU" 2>/dev/null)" = "$KENNUNG" ]; then
-    echo "<INFO> postinstall lief in diesem Einbau bereits - der zweite Aufruf"
-    echo "<INFO> aus postupgrade.sh wird uebersprungen."
-    exit 0
-fi
+# ---------- Genau einmal je Einbau (K9, seit 0.9.32) ----------
+# LoxBerry ruft postinstall.sh bei JEDEM Einbau selbst (plugininstall.pl
+# :1305-1311) und bei einem Upgrade danach postupgrade.sh (:1331-1337). Bis
+# 0.9.31 rief postupgrade.sh dieses Skript ein zweites Mal auf, und ein Merker
+# <ordner>.postinstall_lauf neben dem Datenordner hielt den zweiten Lauf an.
+# Seit 0.9.32 tut postupgrade.sh nur noch das Eigene (endpunkt_ein, Bruecke) -
+# der zweite Lauf und der Merker entfallen; die Deinstallation raeumt einen
+# alten Merker weiter weg.
 LIBURL="git+https://github.com/thomluther/anker-solix-api.git@${LIBTAG}"
 
-mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten"          "$PDATA/verlauf" "$PDATA/energie" || {
+# Die Warteschlange heisst seit 0.9.32 auftraege/ (N1): befehle/ gehoert der
+# Befehlsbruecke, die ihn selbst mit 0700 anlegt.
+mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/auftraege" "$PDATA/antworten"          "$PDATA/verlauf" "$PDATA/energie" || {
     echo "<FAIL> Ordner konnten nicht angelegt werden."
     exit 1
 }
@@ -196,7 +190,10 @@ for f in ankersolix.json zugang.json; do
         ( umask 077 && cp "$CF" "$CF.kaputt" ) 2>/dev/null && chmod 600 "$CF.kaputt" 2>/dev/null
     fi
     NEU="$CF.neu.$$"
-    if cp -p "$BK" "$NEU" 2>/dev/null && mv -f "$NEU" "$CF" 2>/dev/null && cmp -s "$BK" "$CF"; then
+    # K2 (seit 0.9.32): erst vergleichen, dann umbenennen - bis 0.9.31 stand
+    # cmp hinter dem mv: scheiterte der Vergleich, war die Datei schon ersetzt
+    # und die Meldung "NICHT zurueckgespielt" falsch.
+    if ( umask 077; cp -p "$BK" "$NEU" ) 2>/dev/null && cmp -s "$BK" "$NEU" && mv -f "$NEU" "$CF" 2>/dev/null; then
         echo "<OK> $f aus Sicherung wiederhergestellt."
     else
         rm -f "$NEU" 2>/dev/null
@@ -207,7 +204,13 @@ done
 if [ -n "$BEISEITE" ]; then
     echo "<WARNING> Einstellungen einer frueheren Installation wurden nicht uebernommen (keine Aktualisierung), sondern beiseitegelegt:$BEISEITE"
 fi
-chmod 600 "$PCONFIG/zugang.json"
+# Rechte NACH jeder Wiederherstellung (K2, seit 0.9.32; Gedaechtnis
+# chmod-vor-cp-p): cp -p traegt die Rechte der Quelle mit - ein chmod davor ist
+# wirkungslos. Beide Dateien und beide Zweitschriften tragen ein Geheimnis.
+chmod 600 "$PCONFIG/zugang.json" "$PCONFIG/ankersolix.json" 2>/dev/null
+for f in ankersolix.json zugang.json; do
+    [ -f "$BASE/config/plugins/$PFOLDER.backup.$f" ] && chmod 600 "$BASE/config/plugins/$PFOLDER.backup.$f" 2>/dev/null
+done
 
 # ---------- Python suchen ----------
 # Die Bibliothek verlangt Python 3.12 oder neuer (pyproject: requires-python
@@ -299,7 +302,13 @@ fi
 # $LIBTAG abgeschrieben, nicht geraten. python-dotenv wird vom Paket heute
 # nicht eingelesen (nur von den Beispielskripten des Projekts) - es steht
 # trotzdem hier, weil es zur erklaerten Liste der Bibliothek gehoert.
-LIBDEPS="aiohttp>=3.10.11 aiofiles>=25.1.0 cryptography>=3.4.8 paho-mqtt>=2.1.0 python-dotenv>=1.2.1"
+#
+# paho-mqtt seit 0.9.32 nach oben begrenzt (N10): der Dienst benutzt es jetzt
+# selbst (Abraeumen mit Ruecklesen, Abnehmer haus/strompreis), und paho 2.0
+# brach die Rueckrufe - eine kuenftige 3.x kaeme sonst ungeprueft mit der
+# naechsten Installation. Die Liste wird gewollt an Leerzeichen geteilt (fuenf
+# Argumente); "<" und "," sind dabei keine Steuerzeichen der Schale.
+LIBDEPS="aiohttp>=3.10.11 aiofiles>=25.1.0 cryptography>=3.4.8 paho-mqtt>=2.1.0,<3 python-dotenv>=1.2.1"
 echo "<INFO> Installiere die Abhaengigkeiten der Bibliothek ..."
 if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary $LIBDEPS; then
     echo "<FAIL> Die Abhaengigkeiten der Bibliothek liessen sich nicht installieren."
@@ -366,11 +375,10 @@ chmod 755 "$PBIN/dienst.sh" 2>/dev/null
 # ak_notify.php wird vom Dienst ueber "php <pfad>" aufgerufen, braucht also
 # kein Ausfuehrungsrecht - lesbar muss es sein.
 chmod 644 "$PBIN/ak_notify.php" 2>/dev/null
-# Das Deinstallationsskript uebernimmt LoxBerry aus dem Installationsordner.
-# Ohne Ausfuehrungsrecht bliebe die Sicherung mit dem Anker-Passwort nach dem
-# Entfernen liegen - deshalb hier, im entpackten Stand, setzen.
-chmod 755 "$SELFDIR/uninstall/uninstall" 2>/dev/null
-chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
+# K6/E8 (seit 0.9.32): kein chmod mehr auf uninstall/uninstall im
+# Auspackordner und kein chown -R. Der Installer kopiert uninstall/uninstall*
+# VOR diesem Skript nach data/system/uninstall/<name> und setzt dort selbst 755
+# (plugininstall.pl :1152-1168); chown lief als loxberry ohnehin ins Leere.
 chmod 600 "$PCONFIG/zugang.json"
 
 # ---------- Dienst wieder anwerfen ----------
@@ -407,6 +415,22 @@ if [ -f "$LIEF" ]; then
         echo "<INFO> starten. Bitte im Reiter Einstellungen nachsehen."
     fi
     rm -f "$LIEF"
+fi
+
+# ---------- Befehlsbruecke (seit 0.9.32, E-E3) ----------
+# Nur bei einer Neuinstallation - bei einem Update liegt die Marke noch, und
+# postupgrade.sh startet nach ihrem Entfernen. Ab Werk ist der Haken aus; dann
+# sagt befehlsbruecke.sh "Haken aus".
+if [ ! -f "$MARKE" ]; then
+    BBSH="$PBIN/befehlsbruecke.sh"
+    if [ -f "$BBSH" ]; then
+        BB_AUS=$(timeout 40 bash "$BBSH" start 2>&1 | head -n 1)
+        case "$BB_AUS" in
+            *gestartet*|*laeuft*) echo "<OK> Befehlsbruecke: $BB_AUS" ;;
+            "Haken aus - kein Start.") echo "<INFO> Befehlsbruecke: aus (Reiter MQTT, Haken 'Befehle ueber MQTT annehmen')." ;;
+            *) echo "<WARNING> Befehlsbruecke: $BB_AUS - der Minutentakt versucht es erneut." ;;
+        esac
+    fi
 fi
 
 # ---------- Schlusszeile ----------
@@ -446,6 +470,4 @@ else
     echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, Anker-Zugangsdaten eintragen"
     echo "<INFO> und den Dienst im Reiter Einstellungen starten."
 fi
-printf '%s' "$KENNUNG" > "$EINBAU" 2>/dev/null \
-    || echo "<WARNING> Der Einbaumerker $EINBAU liess sich nicht schreiben."
 exit 0

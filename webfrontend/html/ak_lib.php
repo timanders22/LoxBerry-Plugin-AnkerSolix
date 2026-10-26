@@ -40,9 +40,14 @@ if (!function_exists('ak_e')) {
 if (!function_exists('lb_wurzel_ermitteln')) {
     function lb_wurzel_ermitteln()
     {
+        /* K12 (seit 0.9.32): Wurzel ist nur, was config/plugins, data/plugins UND
+         * config/system/general.json traegt (Regeln/06, wie der Dienst und
+         * dienst.sh). Bis 0.9.31 genuegten config/plugins und webfrontend - ein
+         * Pruefarchiv unter <wurzel>/tmp/ galt damit als Teil der Anlage. */
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -55,46 +60,40 @@ if (!function_exists('lb_wurzel_ermitteln')) {
 
 function ak_paths()
 {
-    static $p = null;
-    if ($p !== null) {
-        return $p;
+    /* K12 (seit 0.9.32, Bauart fer_paths() aus Ferien 1.2.28/1.2.29):
+     *  - Wurzel = LBHOMEDIR (mit config/plugins und data/plugins), sonst lb_wurzel_ermitteln() (streng, mit
+     *    general.json). Der feste Rueckfall auf ein Benutzerverzeichnis ist weg - diesen Pfad gab es auf
+     *    keinem LoxBerry (Regeln/06).
+     *  - Archivschutz: Pfade der Anlage nur, wenn diese Datei wirklich unter <wurzel>/webfrontend/html/plugins/
+     *    <ordner>/ liegt (installiert) ODER LBHOMEDIR und ein gueltiges LBPPLUGINDIR ausdruecklich gesetzt sind
+     *    (Pruefstaende, Freigabetor: beide Variablen noetig). Bis 0.9.31 las ein Archiv unter der Wurzel das
+     *    Aktionstoken der Anlage (Probe k12 Fall A). Sonst Archivpfade neben dem Plugin.
+     *  - Installiert gilt der eigene Ordner, nicht LBPPLUGINDIR.
+     * Ergebnis je Prozess gemerkt, Schluessel = LBHOMEDIR und LBPPLUGINDIR. */
+    static $merk = array();
+    $env_home = rtrim((string) getenv('LBHOMEDIR'), '/');
+    $env_ordner = (string) getenv('LBPPLUGINDIR');
+    $schluessel = $env_home . "\n" . $env_ordner;
+    if (isset($merk[$schluessel])) {
+        return $merk[$schluessel];
     }
-    $home = getenv('LBHOMEDIR');
-    if (!$home || !is_dir($home)) {
-        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-            if (is_dir($k)) {
-                $home = $k;
-                break;
-            }
+    $home_ok = ($env_home !== '' && is_dir($env_home . '/config/plugins') && is_dir($env_home . '/data/plugins'));
+    $home = $home_ok ? $env_home : lb_wurzel_ermitteln();
+    $self = basename(dirname(__FILE__));
+    $ausdruecklich = basename(rtrim($env_ordner, '/'));
+    $dir = '';
+    if ($home !== '') {
+        $ak_hier = @realpath(dirname(__FILE__));
+        $ak_soll = @realpath($home . '/webfrontend/html/plugins/' . $self);
+        if (!ak_ordner_ungueltig($self) && $ak_hier !== false && $ak_soll !== false && $ak_hier === $ak_soll) {
+            $dir = $self;
+        } elseif ($home_ok && !ak_ordner_ungueltig($ausdruecklich)
+                  && preg_match('/^[A-Za-z0-9_\-]{1,64}\z/', $ausdruecklich)) {
+            $dir = $ausdruecklich;
         }
     }
-    // Der Pluginordner ergibt sich aus dem Ablageort dieser Datei. Der
-    // MD5-Schluessel aus der plugindatabase.json wird bewusst NICHT benutzt -
-    // er wird aus Autorenname, E-Mail und Plugin-Name gebildet und aendert
-    // sich bei jedem Fork.
-    $dir = basename(dirname(__FILE__));
-    // Der Rueckfall unten gilt nur AUSSERHALB der Installationslage (ausgepacktes
-    // Archiv, Sandkasten: dort heisst der Ordner "html"). Liegt diese Datei
-    // unter <home>/webfrontend/html/plugins/<ordner>/, IST <ordner> der Name -
-    // auch wenn config/plugins/<ordner>/ gerade fehlt. Bis 0.9.18 fiel eine
-    // Zweitinstallation "ankersolix01" in ihrer Upgrade-Luecke (Konfigordner
-    // abgeraeumt) auf "ankersolix" zurueck: die Sperre sah auf die fremde
-    // Marke, und ein Speichern schrieb in die Zugangsdaten des ANDEREN Plugins
-    // (WSL, Pruefung-AnkerSolix-0.9.19, Faelle P3/P4; Regeln/06, "Ein Rueckfall
-    // auf den vorgesehenen Ordnernamen ...").
-    $ak_hier = @realpath(dirname(__FILE__));
-    $ak_soll = $home ? @realpath($home . '/webfrontend/html/plugins/' . $dir) : false;
-    $installiert = ($ak_hier !== false && $ak_soll !== false && $ak_hier === $ak_soll);
-    if ($home && !$installiert && !is_dir($home . '/config/plugins/' . $dir)) {
-        foreach (array(getenv('LBPPLUGINDIR'), 'ankersolix') as $kand) {
-            if ($kand && is_dir($home . '/config/plugins/' . $kand)) {
-                $dir = $kand;
-                break;
-            }
-        }
-    }
-    if ($home) {
-        $p = array(
+    if ($dir !== '') {
+        return $merk[$schluessel] = array(
             'home'      => $home,
             'plugin'    => $dir,
             'configdir' => $home . '/config/plugins/' . $dir,
@@ -106,25 +105,27 @@ function ak_paths()
             'logdir'    => $home . '/log/plugins/' . $dir,
             'log'       => $home . '/log/plugins/' . $dir . '/ankersolix.log',
             'startlog'  => $home . '/log/plugins/' . $dir . '/ankersolix_start.log',
-        );
-    } else {
-        // Nicht installiert (Entwicklung, Attrappe): neben dem Plugin arbeiten.
-        $basis = dirname(dirname(__DIR__));
-        $p = array(
-            'home'      => '',
-            'plugin'    => $dir,
-            'configdir' => $basis . '/config',
-            'config'    => $basis . '/config/ankersolix.json',
-            'zugang'    => $basis . '/config/zugang.json',
-            'sicherung' => $basis . '/config/ankersolix.backup.json',
-            'datadir'   => $basis . '/data',
-            'bindir'    => $basis . '/bin',
-            'logdir'    => $basis . '/log',
-            'log'       => $basis . '/log/ankersolix.log',
-            'startlog'  => $basis . '/log/ankersolix_start.log',
+            'general'   => $home . '/config/system/general.json',
+            'lang'      => $home . '/templates/plugins/' . $dir . '/lang',
         );
     }
-    return $p;
+    // Nicht installiert (ausgepacktes Archiv, Entwicklung): neben dem Plugin arbeiten, nie in der Anlage.
+    $basis = dirname(dirname(__DIR__));
+    return $merk[$schluessel] = array(
+        'home'      => '',
+        'plugin'    => ak_ordner_ungueltig($self) ? 'ankersolix' : $self,
+        'configdir' => $basis . '/config',
+        'config'    => $basis . '/config/ankersolix.json',
+        'zugang'    => $basis . '/config/zugang.json',
+        'sicherung' => $basis . '/config/ankersolix.backup.json',
+        'datadir'   => $basis . '/data',
+        'bindir'    => $basis . '/bin',
+        'logdir'    => $basis . '/log',
+        'log'       => $basis . '/log/ankersolix.log',
+        'startlog'  => $basis . '/log/ankersolix_start.log',
+        'general'   => '',
+        'lang'      => $basis . '/templates/lang',
+    );
 }
 
 /**
@@ -159,7 +160,9 @@ function ak_vorgaben()
         'energie_tage'       => 400,
         'zaehler_ein'        => 1,
         /* --- MQTT --- */
-        'mqtt_ein'           => 0,
+        // Seit 0.9.32 ab Werk 1 (Entscheidung 2, E-E12); eine eingerichtete Bestandsdatei ohne den
+        // Schluessel liest ihn ueber ak_uebergang() weiter als 0.
+        'mqtt_ein'           => 1,
         'mqtt_topic'         => 'ankersolix',
         'mqtt_nur_aenderung' => 0,
         /* --- Steuerung --- */
@@ -174,6 +177,8 @@ function ak_vorgaben()
         /* --- Meldewege --- */
         'melden_ein'         => 1,
         'melden_alter'       => 900,
+        /* --- Strompreis (Anzeige, V2b, seit 0.9.32) - Abnehmer haus/strompreis im Dienst, ab Werk aus --- */
+        'strompreis_ein'     => 0,
         /* --- Oberflaeche und Endpunkt --- */
         'aktionstoken'       => '',
         'wartezeit'          => 6,
@@ -185,6 +190,15 @@ function ak_vorgaben()
         'wache_lb_melden'    => 0,     // neue Runde zusaetzlich als LoxBerry-Meldung
         'wache_sperren_ein'  => 0,     // fremde Schreiber mit 409 abweisen
         'wache_erlaubt'      => '',    // erlaubte Schreiber: Kennung, Adresse oder Kennung@Adresse
+        /* --- Seit 0.9.32, nur Oberflaeche, Endpunkt und Bruecke (ak_vorgaben_dienst() nimmt sie heraus) ---
+         * endpunkt_ein: der HTTP-Lesezweig fuer Loxone (status, energie, geraet, anlagen, roh). Neuinstallation
+         * 0 - Werte kommen ueber MQTT; eine eingerichtete Bestandsdatei ohne den Schluessel liest ihn als 1
+         * (ak_uebergang(), postupgrade.sh traegt ihn fest ein; E-E21). selftest und die Befehle mit Token
+         * haengen nicht daran.
+         * befehle_mqtt_ein: Befehle aus Loxone ueber die Befehlsbruecke annehmen (V1) - ab Werk aus, wirkt nur
+         * mit mqtt_ein UND steuerung_ein (zweiter Haken). */
+        'endpunkt_ein'       => 0,
+        'befehle_mqtt_ein'   => 0,
     );
 }
 
@@ -224,7 +238,9 @@ function ak_haken_felder()
     return array('ohne_details', 'ohne_energie', 'ohne_prognose', 'zaehler_ein',
                  'mqtt_ein', 'mqtt_nur_aenderung', 'steuerung_ein', 'melden_ein',
                  // Schreiber-Wache (Energie-1 C1)
-                 'wache_ein', 'wache_lb_melden', 'wache_sperren_ein');
+                 'wache_ein', 'wache_lb_melden', 'wache_sperren_ein',
+                 // seit 0.9.32 (E-E13)
+                 'endpunkt_ein', 'befehle_mqtt_ein', 'strompreis_ein');
 }
 
 /** Die Schluessel, die auch der Dienst kennen muss. */
@@ -232,6 +248,8 @@ function ak_vorgaben_dienst()
 {
     $v = ak_vorgaben();
     unset($v['aktionstoken'], $v['wartezeit']);
+    // Seit 0.9.32: der Lesezweig des Endpunkts und der Haken der Bruecke betreffen den Dienst nicht.
+    unset($v['endpunkt_ein'], $v['befehle_mqtt_ein']);
     // Die Schreiber-Wache (Energie-1 C1) lebt nur im Endpunkt; der Dienst kennt sie
     // nicht und braucht sie nicht (sonst meldete der Vorgaben-Abgleich "nur PHP").
     foreach (ak_wache_schluessel() as $ak_wk) {
@@ -370,7 +388,8 @@ function ak_log_wenn_neu($schluessel, $text, $sekunden = 3600)
 function ak_endpunkt_log($weg, $text, $fenster = 600)
 {
     $p = ak_paths();
-    if (!in_array($weg, array('abweisung', 'befehl'), true)
+    // 'endpunkt_aus' seit 0.9.32 (E-E21): ein Lesezweig-Aufruf bei endpunkt_ein 0.
+    if (!in_array($weg, array('abweisung', 'befehl', 'endpunkt_aus'), true)
         || !is_dir($p['datadir']) || !is_dir(dirname($p['log']))) {
         return false;
     }
@@ -398,7 +417,7 @@ function ak_endpunkt_log($weg, $text, $fenster = 600)
     $geschrieben = false;
     // Eine zurueckgestellte Uhr ($letzte in der Zukunft) haelt nichts still.
     if ($jetzt - $letzte >= $fenster || $letzte > $jetzt) {
-        $zeile = '[' . date('Y-m-d H:i:s') . '] ' . ($weg === 'abweisung' ? 'WARNING' : 'INFO')
+        $zeile = '[' . date('Y-m-d H:i:s') . '] ' . ($weg !== 'befehl' ? 'WARNING' : 'INFO')
                . ' Endpunkt (' . $weg . ') von ' . $von . ': '
                . str_replace(array("\r", "\n"), ' ', (string) $text);
         if ($still > 0 && $letzte > 0) {
@@ -447,6 +466,8 @@ function ak_config($erzeugen = true)
             $ziel = $p['config'] . '.kaputt';
             if (!is_file($ziel)) {
                 @copy($p['config'], $ziel);
+                // K15 (seit 0.9.32): copy() uebernimmt keine Rechte, die Abschrift traegt das Aktionstoken.
+                @chmod($ziel, 0600);
             }
             ak_log_wenn_neu('config_kaputt',
                 'Die Konfiguration ist unlesbar (kein gueltiges JSON). Eine Abschrift liegt als '
@@ -469,7 +490,8 @@ function ak_config($erzeugen = true)
             }
         }
     }
-    return array_merge(ak_vorgaben(), is_array($cfg) ? $cfg : array());
+    // Seit 0.9.32: die Lese-Regel fuer Bestandsdateien (mqtt_ein, endpunkt_ein; E-E12, E-E21, N11).
+    return array_merge(ak_vorgaben(), ak_uebergang(is_array($cfg) ? $cfg : array()));
 }
 
 function ak_config_speichern($cfg)
@@ -938,8 +960,15 @@ function ak_vorgaben_abgleich()
  * Rueckgabe: array von array(stand, text). stand: 1 = ginge durch,
  * 0 = wuerde abgewiesen, -1 = Hinweis.
  */
-function ak_trockenlauf($aktion, $anlage, $wert)
+function ak_trockenlauf($aktion, $anlage, $wert, $sn = '')
 {
+    /* Seit 0.9.32 alle sieben Befehle des Endpunkts (K18) - mit derselben
+     * Bereichspruefung wie der Dienst (einspeisegrenze 0-20000 W,
+     * notstromreserve 0-100, pvlimit 0-800 W und Seriennummer Pflicht) und der
+     * Zeile zur Betriebsart bei der Hauslast (K24, E-E19). Befehlsziel ist nur
+     * eine Solarbank - genau die waehlt speicher_waehlen() im Dienst; ein
+     * Geraet "solarbank_pps" steht als eigene Zeile "nur lesend" da (K23 in
+     * umgekehrter Richtung: die Bibliothek kann es nicht steuern). */
     $cfg = ak_config(true);
     $zeilen = array();
     $anlagen = ak_anlagen();
@@ -961,12 +990,34 @@ function ak_trockenlauf($aktion, $anlage, $wert)
     $an = $anlagen[$nr];
     $zeilen[] = array(1, sprintf(ak_t('TROCKEN.ANLAGE'), $nr, $an['name']));
 
+    if ($aktion === 'pvlimit') {
+        // Die Wechselrichter-Begrenzung gilt EINEM Geraet (Seriennummer Pflicht).
+        $alle = ak_geraete();
+        $w = (int) $wert;
+        if ((string) $sn === '' || !isset($alle[$sn])) {
+            $zeilen[] = array(0, ak_t('TROCKEN.SN_FEHLT'));
+        } else {
+            $g = $alle[$sn];
+            $zeilen[] = array(1, sprintf(ak_t('TROCKEN.GERAET'), $g['name'], $sn,
+                (int) $g['generation'] > 0 ? (int) $g['generation'] : '?'));
+        }
+        $zeilen[] = array(-1, sprintf(ak_t('TROCKEN.WEG'), ak_befehlsweg($aktion, 0)));
+        $zeilen[] = ($w < 0 || $w > 800)
+            ? array(0, sprintf(ak_t('TROCKEN.AUSSER_BEREICH'), $w, 0, 800, 'W'))
+            : array(1, sprintf(ak_t('TROCKEN.IN_BEREICH'), $w, 0, 800, 'W'));
+        return array_merge($zeilen, ak_trockenlauf_bremse($cfg, false));
+    }
+
     // Welches Geraet bekaeme den Befehl, und ueber welchen Weg?
     $speicher = array();
-    foreach (ak_geraete() as $sn => $g) {
-        if ((string) $g['site_id'] === (string) $an['site_id']
-            && in_array($g['typ'], array('solarbank', 'solarbank_pps'), true)) {
-            $speicher[$sn] = $g;
+    foreach (ak_geraete() as $gsn => $g) {
+        if ((string) $g['site_id'] !== (string) $an['site_id']) {
+            continue;
+        }
+        if ($g['typ'] === 'solarbank') {
+            $speicher[$gsn] = $g;
+        } elseif ($g['typ'] === 'solarbank_pps') {
+            $zeilen[] = array(-1, sprintf(ak_t('TROCKEN.PPS_NUR_LESEND'), $g['name'], $gsn));
         }
     }
     if (!$speicher) {
@@ -974,10 +1025,10 @@ function ak_trockenlauf($aktion, $anlage, $wert)
         return $zeilen;
     }
     ksort($speicher);
-    $sn = (string) key($speicher);
-    $g = $speicher[$sn];
+    $gsn = (string) key($speicher);
+    $g = $speicher[$gsn];
     $gen = (int) $g['generation'];
-    $zeilen[] = array(1, sprintf(ak_t('TROCKEN.GERAET'), $g['name'], $sn, $gen > 0 ? $gen : '?'));
+    $zeilen[] = array(1, sprintf(ak_t('TROCKEN.GERAET'), $g['name'], $gsn, $gen > 0 ? $gen : '?'));
     $zeilen[] = array(-1, sprintf(ak_t('TROCKEN.WEG'), ak_befehlsweg($aktion, $gen)));
 
     // Innerhalb der Schrittweite ginge nichts hinaus (Nr. 21): dann ist die
@@ -996,6 +1047,17 @@ function ak_trockenlauf($aktion, $anlage, $wert)
                 abs($w - (int) $soll), (int) $cfg['schrittweite']));
             $schritt_unveraendert = true;
         }
+        if ($gen >= 2 && !$schritt_unveraendert) {
+            // K24: wie hauslast_modus() im Dienst, hier nur nach dem Abbild.
+            $m = isset($an['modus']) ? $an['modus'] : null;
+            if ($m === null || (int) $m === 0) {
+                $zeilen[] = array(-1, ak_t('TROCKEN.MODUS_HAUSLAST_UNBEKANNT'));
+            } elseif (in_array((int) $m, array(2, 3), true)) {
+                $zeilen[] = array(1, sprintf(ak_t('TROCKEN.MODUS_HAUSLAST_OK'), (int) $m));
+            } else {
+                $zeilen[] = array(0, sprintf(ak_t('TROCKEN.MODUS_HAUSLAST_NEIN'), (int) $m));
+            }
+        }
     } elseif ($aktion === 'modus') {
         $modi = ak_modi_erlaubt($an);
         $zeilen[] = in_array((string) $wert, $modi, true)
@@ -1013,17 +1075,18 @@ function ak_trockenlauf($aktion, $anlage, $wert)
                 ? array(1, sprintf(ak_t('TROCKEN.STUFE_OK'), (int) $wert))
                 : array(0, sprintf(ak_t('TROCKEN.STUFE_UNZULAESSIG'), (int) $wert, implode(', ', $stufen)));
         }
+    } elseif ($aktion === 'einspeisung') {
+        $zeilen[] = in_array((string) $wert, array('ein', 'aus'), true)
+            ? array(1, sprintf(ak_t('TROCKEN.EINSPEISUNG_OK'), (string) $wert))
+            : array(0, ak_t('TROCKEN.EINSPEISUNG_WERT'));
+    } elseif ($aktion === 'einspeisegrenze' || $aktion === 'notstromreserve') {
+        $w = (int) $wert;
+        list($gu, $go, $einheit) = $aktion === 'einspeisegrenze' ? array(0, 20000, 'W') : array(0, 100, 'Proz.');
+        $zeilen[] = ($w < $gu || $w > $go)
+            ? array(0, sprintf(ak_t('TROCKEN.AUSSER_BEREICH'), $w, $gu, $go, $einheit))
+            : array(1, sprintf(ak_t('TROCKEN.IN_BEREICH'), $w, $gu, $go, $einheit));
     }
-
-    $bremse = (int) $cfg['schreibbremse'];
-    if ($bremse > 0 && !$schritt_unveraendert) {
-        $letzte = ak_letzter_schreibbefehl();
-        $rest = $bremse - (time() - $letzte);
-        $zeilen[] = ($letzte > 0 && $rest > 0)
-            ? array(0, sprintf(ak_t('TROCKEN.BREMSE_AKTIV'), $rest, $bremse))
-            : array(1, sprintf(ak_t('TROCKEN.BREMSE_FREI'), $bremse));
-    }
-    return $zeilen;
+    return array_merge($zeilen, ak_trockenlauf_bremse($cfg, $schritt_unveraendert));
 }
 
 /** Welcher Bibliotheksaufruf traefe dieses Geraet? */
@@ -1768,6 +1831,14 @@ function ak_wache_zustand($schl, $gestoert, $text_gestoert, $text_wieder)
  *  neu geholt: loxberry_system.php setzt beim Einbinden ein eigenes $p. */
 function ak_wache_lb_melden($text)
 {
+    /* LoxBerry-Meldung der Wache (nur mit wache_lb_melden). Bindet loxberry_log.php
+     * selbst ein - keine phplib laedt es von allein ("notify_ext() nie erreicht");
+     * bin/ak_notify.php des Dienstes tut dasselbe. E8 (seit 0.9.32): loxberry_log.php
+     * laedt loxberry_system.php selbst; das require in DIESER Funktion macht dessen
+     * Variablen funktionslokal - deshalb setzen wir $GLOBALS['lbpplugindir'] (E3),
+     * sonst sortiert notify_ext() die Meldung als System (_ISSYSTEM) statt als
+     * Plugin ein. Die Pfade werden NACH dem Einbinden neu geholt: loxberry_system.php
+     * setzt beim Einbinden ein eigenes $p. */
     $ak_wp = ak_paths();
     if ($ak_wp['home'] !== '' && !function_exists('notify_ext')) {
         $ak_wl = $ak_wp['home'] . '/libs/phplib/loxberry_log.php';
@@ -1781,6 +1852,7 @@ function ak_wache_lb_melden($text)
             . 'notify_ext() ist hier nicht vorhanden - gemeldet wird nur im Protokoll.');
         return false;
     }
+    $GLOBALS['lbpplugindir'] = ak_paths()['plugin'];
     notify_ext(array(
         'PACKAGE'  => ak_paths()['plugin'],
         'NAME'     => 'Anker SOLIX',
@@ -2012,7 +2084,8 @@ function ak_befehl_absetzen($befehl, $wartezeit = null, $cfg = null)
     }
     $wartezeit = max(0, min(20, (int) $wartezeit));
 
-    $ordner = $p['datadir'] . '/befehle';
+    // N1 (seit 0.9.32): ein eigener Ordner - befehle/ gehoert der Befehlsbruecke (zustand.json, waechter.json).
+    $ordner = $p['datadir'] . '/auftraege';
     if (!is_dir($ordner) && !@mkdir($ordner, 0775, true) && !is_dir($ordner)) {
         return array(0, sprintf(ak_t('TEST.M_ABLAGE_ORDNER'), $ordner), 0);
     }
@@ -2035,6 +2108,826 @@ function ak_befehl_absetzen($befehl, $wartezeit = null, $cfg = null)
         usleep(100000);
     }
     return array(2, sprintf(ak_t('TEST.M_EINGEREIHT'), $wartezeit), 0);
+}
+
+/* ==================================================================
+ * Gruppe 26 (0.9.32): Hausform MQTT, Befehlsbruecke, endpunkt_ein,
+ * Strompreis-Anzeige, healthcheck (ENTSCHEIDUNGEN_GRUPPE26_ANKER.md,
+ * entwurf_gruppe26_ak.txt Abschnitte 2 und 3)
+ * ================================================================== */
+
+/** Ordnernamen, die nie ein Pluginordner sind (wie bb_ordner_ungueltig() der Bruecke 1.0.1). */
+function ak_ordner_ungueltig($ordner)
+{
+    return in_array((string) $ordner, array('', '.', '..', '/', 'html', 'htmlauth', 'bin', 'plugins', 'webfrontend'), true);
+}
+
+/**
+ * Lese-Regel fuer Schluessel, deren Vorgabe sich mit 0.9.32 geaendert hat oder die neu sind und fuer eine
+ * bestehende Anlage anders gelten muessen (E-E12, E-E21, N11) - dieselbe Regel wie uebergang() im Dienst.
+ *
+ * Eine EINGERICHTETE Datei (mindestens ein Schluessel ausser aktionstoken) stammt von vor 0.9.32, wenn ihr
+ * der neue Schluessel fehlt: mqtt_ein galt dort 0 (die Vorgabe ist jetzt 1), und der HTTP-Lesezweig fuer
+ * Loxone war offen (endpunkt_ein 1, die Vorgabe ist jetzt 0). Eine leere Datei ("{}", so legt postinstall.sh
+ * an) und eine fehlende sind neu - es gelten die Vorgaben. Das Kriterium ist NICHT "Token vorhanden": das
+ * erste Oeffnen der Oberflaeche speichert ueber ak_token() die vollstaendige Vorgabeliste samt Token - schon
+ * mit den neuen Schluesseln. Geschrieben wird hier nichts; postupgrade.sh traegt endpunkt_ein fest ein.
+ */
+function ak_uebergang($roh)
+{
+    if (!is_array($roh)) {
+        return array();
+    }
+    $eingerichtet = false;
+    foreach (array_keys($roh) as $k) {
+        if ((string) $k !== 'aktionstoken') {
+            $eingerichtet = true;
+            break;
+        }
+    }
+    if ($eingerichtet) {
+        if (!array_key_exists('mqtt_ein', $roh)) {
+            $roh['mqtt_ein'] = 0;
+        }
+        if (!array_key_exists('endpunkt_ein', $roh)) {
+            $roh['endpunkt_ein'] = 1;
+        }
+    }
+    return $roh;
+}
+
+/**
+ * Die Schluessel, die in einer Sicherung FEHLEN duerfen (Sicherung von vor ihrer Fassung): die Schreiber-Wache
+ * (0.9.28) und die drei Schluessel von 0.9.32 (E-E13). Sie behalten dann den GELTENDEN Wert, und die Seite sagt
+ * es (EINST.SICH_SPAETER). mqtt_ein steht in jeder Sicherung seit 0.9.x - keine Ausnahme.
+ */
+function ak_sicherung_spaeter()
+{
+    return array_merge(ak_wache_schluessel(), array('endpunkt_ein', 'befehle_mqtt_ein', 'strompreis_ein'));
+}
+
+/** Der Port des LoxBerry-Webservers aus general.json (Webserver.Port, Vorgabe 80) - K13, Bauform Marstek M4. */
+function ak_webserver_port()
+{
+    $p = ak_paths();
+    if ($p['general'] === '') {
+        return 80;
+    }
+    $gen = ak_json_lesen($p['general']);
+    $port = (isset($gen['Webserver']) && is_array($gen['Webserver']) && isset($gen['Webserver']['Port']))
+        ? (int) $gen['Webserver']['Port'] : 0;
+    return ($port >= 1 && $port <= 65535) ? $port : 80;
+}
+
+/** Der UDP-Eingang des MQTT-Gateways (Udpinport, Vorgabe 11884) - fuer Brueckenvorlage und Einbindung. */
+function ak_udp_port()
+{
+    $m = ak_mqtt_zustand();
+    $u = isset($m['udpport']) ? (int) $m['udpport'] : 0;
+    return ($u > 0 && $u < 65536) ? $u : 11884;
+}
+
+/** Der Schreibbremsen-Teil des Trockenlaufs (Nr. 21: innerhalb der Schrittweite nicht im Weg). */
+function ak_trockenlauf_bremse($cfg, $schritt_unveraendert)
+{
+    $bremse = (int) $cfg['schreibbremse'];
+    if ($bremse <= 0 || $schritt_unveraendert) {
+        return array();
+    }
+    $letzte = ak_letzter_schreibbefehl();
+    $rest = $bremse - (time() - $letzte);
+    return array(($letzte > 0 && $rest > 0)
+        ? array(0, sprintf(ak_t('TROCKEN.BREMSE_AKTIV'), $rest, $bremse))
+        : array(1, sprintf(ak_t('TROCKEN.BREMSE_FREI'), $bremse)));
+}
+
+/* ---------------- Einen Befehl annehmen - EINE Stelle fuer Endpunkt und Bruecke (E-E2) ----------------
+ *
+ * Der Ablauf des Endpunkts ab der Freigabe, herausgeloest (bis 0.9.31 stand er in webfrontend/html/index.php):
+ * Steuerung aus 403 (ausser abruf), Dienst 503, Sofortabruf-Bremse 503/429, Pflichtwerte 400, Schreiber-Wache
+ * 409, Gleichwert-Unterdrueckung (X-7, Merker "Sollwert empfangen" Nr. 22), Einreihen mit 'quelle', Warten auf
+ * den Dienst, Schrittweite (UNVERAENDERT=1). Der Endpunkt prueft Token, Aktion und das Muster der Parameter
+ * weiter selbst und gibt danach nur aus, was hier entsteht - seine Antworten sind byte-gleich mit 0.9.31
+ * (Beleg ep_<k>.txt). Die Befehlsbruecke ruft dieselbe Funktion mit von=mqtt und quelle=mqtt.
+ *
+ * $roh: aktion, anlage (Text), sn (optional), watt/prozent/wert (Text oder Zahl, '' = fehlt).
+ * Rueckgabe array(HTTP-Code, Antworttext samt Zeilenenden, ok 0|1|2, Kopfzeilen).
+ */
+function ak_befehl_annehmen($roh, $von, $quelle, $cfg = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = ak_config(false);
+    }
+    $aktion = isset($roh['aktion']) ? (string) $roh['aktion'] : '';
+    $anlage = isset($roh['anlage']) ? (string) $roh['anlage'] : '1';
+    $sn = isset($roh['sn']) ? (string) $roh['sn'] : '';
+    if ($aktion !== 'abruf' && empty($cfg['steuerung_ein'])) {
+        return array(403, "SET;OK=0;GRUND=STEUERUNG_AUS\n"
+            . "Schreibende Befehle sind gesperrt. Reiter Einstellungen, Haken 'Schreibende Befehle zulassen'.\n",
+            0, array());
+    }
+    if (ak_dienst_pid() === 0) {
+        // Nicht stillschweigend einreihen: ohne laufenden Dienst passiert nichts,
+        // und der Befehl laege bis zum naechsten Start in der Warteschlange.
+        return array(503, "SET;OK=0;GRUND=DIENST_LAEUFT_NICHT\n"
+            . "Der Abrufdienst laeuft nicht. Reiter Einstellungen, Knopf 'Dienst starten'.\n", 0, array());
+    }
+    /* Sofortabruf hoechstens alle 30 s (Verbesserung a3 / X-7). Faellt der Merker aus, wird abgewiesen. */
+    if ($aktion === 'abruf') {
+        $rest = ak_abruf_bremse();
+        if ($rest < 0) {
+            return array(503, "SET;OK=0;AKTION=abruf;GRUND=BREMSE_MERKER\n", 0, array());
+        }
+        if ($rest > 0) {
+            return array(429, 'SET;OK=0;AKTION=abruf;GRUND=BREMSE;WARTEN_S=' . $rest . "\n", 0,
+                array('Retry-After: ' . $rest));
+        }
+    }
+    $befehl = array('aktion' => $aktion, 'anlage' => $anlage);
+    if ($sn !== '') {
+        $befehl['sn'] = $sn;
+    }
+    /* Welcher Parameter zu welcher Aktion gehoert - eine Stelle. Ein Feld, das nur zu einer Aktion gehoert,
+     * wird bei den anderen gar nicht erst uebernommen. */
+    $pflicht = array(
+        'hauslast'        => array('watt', 'WATT_FEHLT'),
+        'einspeisegrenze' => array('watt', 'WATT_FEHLT'),
+        'pvlimit'         => array('watt', 'WATT_FEHLT'),
+        'reserve'         => array('prozent', 'PROZENT_FEHLT'),
+        'notstromreserve' => array('prozent', 'PROZENT_FEHLT'),
+        'modus'           => array('wert', 'WERT_FEHLT'),
+        'einspeisung'     => array('wert', 'WERT_FEHLT'),
+    );
+    if (isset($pflicht[$aktion])) {
+        list($feld, $grund) = $pflicht[$aktion];
+        $v = isset($roh[$feld]) ? $roh[$feld] : '';
+        if ((string) $v === '') {
+            return array(400, 'SET;OK=0;GRUND=' . $grund . "\n", 0, array());
+        }
+        $befehl[$feld] = ($feld === 'wert') ? (string) $v : (int) $v;
+    }
+    if ($aktion === 'einspeisung' && !in_array($befehl['wert'], array('ein', 'aus'), true)) {
+        return array(400, "SET;OK=0;GRUND=WERT_UNZULAESSIG\nErlaubt sind: ein, aus\n", 0, array());
+    }
+    if ($aktion === 'pvlimit' && $sn === '') {
+        // Eine Wechselrichter-Begrenzung gilt EINEM Geraet - geraten wird nicht.
+        return array(400, "SET;OK=0;GRUND=SN_FEHLT\n", 0, array());
+    }
+    /* Schreiber-Wache (Energie-1 C1, Nr. 25) VOR der Gleichwert-Unterdrueckung. Ueber die Bruecke heisst der
+     * Schreiber "mqtt" (keine Absenderadresse). */
+    $wache = ak_wache_anwenden($aktion, isset($befehl['wert']) ? $befehl['wert'] : '', $anlage, $von);
+    $wz = $wache['zusatz'];
+    if ($wache['abweisen']) {
+        return array(409, 'SET;OK=0;AKTION=' . $aktion . ";GRUND=FREMDSCHREIBER\n"
+            . 'Der Schreiber ' . $wache['schreiber'] . ' steht nicht in der Liste der erlaubten Schreiber '
+            . "(Reiter Einstellungen, Schreiber-Wache). Nichts wurde eingereiht.\n", 0, array());
+    }
+    /* Gleichwert-Unterdrueckung (X-7): der Merker bleibt bis nach der Antwort des Dienstes gesperrt; laesst er
+     * sich nicht oeffnen, faellt es geschlossen aus (503) - eingereiht wird dann nichts. */
+    $schl = ak_gleichwert_schluessel($befehl);
+    $gw = null;
+    $merker = array();
+    $gwert = ak_gleichwert_wert($befehl);
+    if ($schl !== '') {
+        $gw = ak_gleichwert_oeffnen();
+        if ($gw === false) {
+            return array(503, 'SET;OK=0;AKTION=' . $aktion . ';GRUND=GLEICHWERT_MERKER' . $wz . "\n", 0, array());
+        }
+        $merker = ak_gleichwert_lesen($gw);
+        $seit = ak_gleichwert_seit($merker, $schl, $gwert);
+        if ($seit >= 0) {
+            ak_gleichwert_schliessen($gw, null);
+            // Derselbe Wert wie eben gesendet: Loxone lebt (Nr. 22).
+            ak_sollwert_empfangen_vermerken();
+            return array(200, sprintf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=Derselbe Wert ging vor %d s hinaus - nichts gesendet.%s\n",
+                $aktion, $seit, $seit, $wz), 1, array());
+        }
+        // Kennzeichen fuer den Dienst (Nr. 22): nimmt er den Sollwert an, setzt ER den Merker - auch fuer die
+        // Bruecke (Quelle mqtt, seit 0.9.32). Die Gleichwert-Werte oben sind schon gebildet.
+        $befehl['quelle'] = (string) $quelle;
+    }
+    list($erg, $meldung, $unv) = ak_befehl_absetzen($befehl, null, $cfg);
+    // Innerhalb der Schrittweite (Nr. 21) ging nichts hinaus: der Merker behaelt den zuletzt GESENDETEN Wert.
+    $unveraendert = ($erg === 1 && !empty($unv));
+    if ($gw !== null) {
+        ak_gleichwert_schliessen($gw, ak_gleichwert_nachher($merker, $unveraendert ? '' : $schl, $gwert, $erg === 1));
+    }
+    $code = $erg === 0 ? 500 : 200;
+    $m = str_replace(array("\r", "\n", ';'), ' ', (string) $meldung);
+    if ($unveraendert) {
+        return array($code, sprintf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;MELDUNG=%s%s\n", $aktion, $m, $wz), 1, array());
+    }
+    return array($code, sprintf("SET;OK=%d;AKTION=%s;MELDUNG=%s%s\n", $erg, $aktion, $m, $wz), (int) $erg, array());
+}
+
+/**
+ * Die Quittung der Befehlsbruecke aus der Antwort von ak_befehl_annehmen(): OK=1 (auch UNVERAENDERT=1) ->
+ * array(true, ''); OK=2 (eingereiht, keine Antwort binnen Wartezeit) -> kein Erfolg, den niemand geprueft hat
+ * (Kopf ak_befehl_absetzen()); sonst array(false, GRUND bzw. die Meldung des Dienstes, etwa
+ * "MODUS_1: Hauslast wirkt nur in Betriebsart manuell ...").
+ */
+function ak_befehl_quittung($r)
+{
+    $ok = isset($r[2]) ? (int) $r[2] : 0;
+    if ($ok === 1) {
+        return array(true, '');
+    }
+    if ($ok === 2) {
+        return array(false, 'OK=2 eingereiht, keine Antwort des Dienstes binnen Wartezeit');
+    }
+    $erste = (string) strtok((string) (isset($r[1]) ? $r[1] : ''), "\n");
+    if (preg_match('/;GRUND=([A-Z_]+)/', $erste, $m)) {
+        return array(false, $m[1]);
+    }
+    if (preg_match('/;MELDUNG=(.*)\z/', $erste, $m)) {
+        $t = trim((string) preg_replace('/;(SCHREIBER|WACHE)=.*\z/', '', $m[1]));
+        return array(false, $t !== '' ? $t : 'abgelehnt');
+    }
+    return array(false, 'HTTP ' . (int) (isset($r[0]) ? $r[0] : 0));
+}
+
+/* ---------------- Werte ueber MQTT: Namenstabelle, V2-Hakenliste (E-E8) ---------------- */
+
+/**
+ * Der Name, unter dem das MQTT-Gateway einen Wert an Loxone gibt: Praefix + "_" + Thema, "/", "%" und
+ * Leerzeichen werden "_" (build_vi_name, Gedaechtnis mqtt-gateway-v2-verhalten; V1 gleich). Beispiele:
+ * ankersolix_status_zaehler, ankersolix_anlage1_soc, ankersolix_anlage1_monat_pv. EINE Stelle fuer
+ * Namenstabelle, Hakenliste und Bausteinliste.
+ */
+function ak_gateway_name($praefix, $thema)
+{
+    return str_replace(array('/', '%', ' '), '_', (string) $praefix . '_' . (string) $thema);
+}
+
+/** Ein Block aus dem Quelltext des Dienstes (MQTT_RETAINED, MQTT_TEXT): Liste der Staemme oder null. */
+function ak_dienst_tabelle($name)
+{
+    $p = ak_paths();
+    $py = $p['bindir'] . '/ankersolix.py';
+    if (!is_file($py)) {
+        $py = dirname(dirname(__DIR__)) . '/bin/ankersolix.py';
+    }
+    if (!is_file($py)) {
+        return null;
+    }
+    $quelle = (string) @file_get_contents($py);
+    if (!preg_match('/^' . preg_quote($name, '/') . '\s*=\s*\((.*?)\)\s*\n/ms', $quelle, $m)) {
+        return null;
+    }
+    preg_match_all('/"([^"]+)"/', $m[1], $t);
+    return $t[1];
+}
+
+/** Die Text-Themen (MQTT_TEXT im Dienst, E-E4): Fehlwert "-" statt -1. null = nicht lesbar. */
+function ak_text_themen()
+{
+    return ak_dienst_tabelle('MQTT_TEXT');
+}
+
+/** Die 25 Haken der V2-Hakenliste fuer das Musterprojekt (Anlage 1, Entwurf 2.6). */
+function ak_v2_haken()
+{
+    return array('status/zaehler', 'status/ok', 'status/alter',
+        'anlageN/soc', 'anlageN/batp', 'anlageN/pv', 'anlageN/haus', 'anlageN/netzbezug', 'anlageN/netzeinspeisung',
+        'anlageN/sollwert', 'anlageN/modus', 'anlageN/reserve', 'anlageN/einspeisung', 'anlageN/einspeisegrenze',
+        'anlageN/prognose', 'anlageN/energie/pv', 'anlageN/energie/batterie_geladen',
+        'anlageN/energie/batterie_abgegeben', 'anlageN/energie/haus', 'anlageN/energie/netzbezug',
+        'anlageN/energie/netzeinspeisung', 'anlageN/monat/pv', 'anlageN/monat/haus', 'anlageN/jahr/pv',
+        'anlageN/jahr/haus');
+}
+
+/** Wo der Wert im Musterprojekt steht (Seite "AnkerSolix" #n, "Steuerung" #n) - Anlage 1. */
+function ak_mp_stellen()
+{
+    return array(
+        'status/ok' => 'AnkerSolix #1, #30, Steuerung #1', 'status/alter' => 'AnkerSolix #2',
+        'status/zaehler' => 'AnkerSolix #45', 'anlageN/soc' => 'AnkerSolix #3, Steuerung #2',
+        'anlageN/batp' => 'AnkerSolix #4', 'anlageN/pv' => 'AnkerSolix #5', 'anlageN/haus' => 'AnkerSolix #6',
+        'anlageN/netzbezug' => 'AnkerSolix #17', 'anlageN/netzeinspeisung' => 'AnkerSolix #18',
+        'anlageN/sollwert' => 'AnkerSolix #19, Steuerung #3', 'anlageN/modus' => 'AnkerSolix #20',
+        'anlageN/reserve' => 'AnkerSolix #21', 'anlageN/einspeisung' => 'AnkerSolix #22',
+        'anlageN/einspeisegrenze' => 'AnkerSolix #23', 'anlageN/prognose' => 'AnkerSolix #24',
+        'anlageN/energie/pv' => 'AnkerSolix #31', 'anlageN/energie/batterie_geladen' => 'AnkerSolix #32',
+        'anlageN/energie/batterie_abgegeben' => 'AnkerSolix #33', 'anlageN/energie/haus' => 'AnkerSolix #34',
+        'anlageN/energie/netzbezug' => 'AnkerSolix #35', 'anlageN/energie/netzeinspeisung' => 'AnkerSolix #36',
+        'anlageN/monat/pv' => 'AnkerSolix #38', 'anlageN/monat/haus' => 'AnkerSolix #39',
+        'anlageN/jahr/pv' => 'AnkerSolix #40', 'anlageN/jahr/haus' => 'AnkerSolix #41',
+    );
+}
+
+/** Wertebereich und Fehlwert je Stamm fuer die Namenstabelle. */
+function ak_mqtt_bereich($stamm, $text)
+{
+    if ($text) {
+        return ak_t('MQTT.B_TEXT');
+    }
+    $fest = array('status/zaehler' => '0 … 999', 'status/ok' => '0 / 1', 'ok' => '0 / 1',
+                  'status/alter' => ak_t('MQTT.B_SEKUNDEN'), 'ts' => ak_t('MQTT.B_UNIX'),
+                  'anlagen' => ak_t('MQTT.B_ANZAHL'), 'anlageN/einspeisung' => '0 / 1 (-1)',
+                  'geraet/<SN>/online' => '0 / 1 (-1)', 'anlageN/modus' => '1 … 8 (-1)');
+    if (isset($fest[$stamm])) {
+        return $fest[$stamm];
+    }
+    return ak_t('MQTT.B_ZAHL');
+}
+
+/**
+ * Die Namenstabelle (Entwurf 2.6): je gesendetes Thema (ak_mqtt_themen() - EINE Quelle fuer Sendeliste,
+ * Reiter, Hakenliste und Bausteinliste) der Gateway-Name, die Bauform (Virtueller Eingang bzw. Texteingang),
+ * die Bedeutung, Wertebereich und Fehlwert, ob zurueckbehalten, ob in der V2-Hakenliste des Musterprojekts
+ * (25 Haken bei Anlage 1), ob "Noncached" (status/ok) und die Stelle im Musterprojekt. Anlagen und Geraete
+ * konkret aus dem Abbild; ohne Abbild Anlage 1 als Muster, Geraete als <SN>. Geraete-Themen tragen die
+ * Seriennummer im Namen - die Tabelle steht nur im angemeldeten Reiter.
+ */
+function ak_mqtt_namenstabelle($cfg)
+{
+    $w = (is_array($cfg) && isset($cfg['mqtt_topic']) && ak_topic_gueltig($cfg['mqtt_topic']))
+        ? (string) $cfg['mqtt_topic'] : 'ankersolix';
+    $texte = ak_text_themen();
+    if ($texte === null) {
+        $texte = array('fehler', 'status/fehler', 'anlageN/name', 'geraet/<SN>/fw');
+    }
+    $retain = ak_retain_themen();
+    $haken = ak_v2_haken();
+    $mp = ak_mp_stellen();
+    $nummern = array_keys(ak_anlagen());
+    if (!$nummern) {
+        $nummern = array('1');
+    }
+    $sns = array_keys(ak_geraete());
+    $aus = array();
+    foreach (ak_mqtt_themen() as $stamm => $bez) {
+        $konkret = array();
+        if (strpos($stamm, 'anlageN/') === 0) {
+            foreach ($nummern as $n) {
+                $konkret[] = array('anlage' . $n . '/' . substr($stamm, 8), (string) $n === '1');
+            }
+        } elseif (strpos($stamm, 'geraet/<SN>/') === 0) {
+            foreach ($sns ? $sns : array('<SN>') as $sn) {
+                $konkret[] = array('geraet/' . $sn . '/' . substr($stamm, 12), false);
+            }
+        } else {
+            $konkret[] = array($stamm, true);
+        }
+        $text = in_array($stamm, $texte, true);
+        foreach ($konkret as $k) {
+            $aus[] = array(
+                'thema' => $k[0], 'stamm' => $stamm, 'voll' => $w . '/' . $k[0],
+                'name' => ak_gateway_name($w, $k[0]), 'text' => $text, 'bez' => $bez,
+                'bereich' => ak_mqtt_bereich($stamm, $text), 'fehlwert' => $text ? '-' : '-1',
+                'retain' => is_array($retain) && in_array($stamm, $retain, true),
+                'haken' => $k[1] && in_array($stamm, $haken, true),
+                'noncached' => $stamm === 'status/ok',
+                'alt' => in_array($stamm, array('ok', 'ts', 'fehler'), true),
+                'sn' => strpos($stamm, 'geraet/') === 0,
+                'mp' => ($k[1] && isset($mp[$stamm])) ? $mp[$stamm] : '',
+            );
+        }
+    }
+    return $aus;
+}
+
+/** Die EVCC-Werte, die die Seite "AnkerSolix Steuerung" fuer den EVCC-Vorrang braucht (V3, E-E18). */
+function ak_evcc_werte()
+{
+    return array(
+        array('evcc2lox_lp1_laedt', 'LOX.EVCC_LAEDT'),
+        array('evcc2lox_netz_kw', 'LOX.EVCC_NETZ'),
+        array('evcc2lox_status_zaehler', 'LOX.EVCC_ZAEHLER'),
+    );
+}
+
+/* ---------------- Befehlsbruecke 1.0.1 (V1, E-E1 bis E-E3) ---------------- */
+
+/** Die Bruecke als Bibliothek laden (BB_NUR_LADEN) - installiert oder im Archiv. */
+function ak_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) {
+        return true;
+    }
+    $p = ak_paths();
+    $kand = array();
+    if ($p['home'] !== '') {
+        $kand[] = $p['bindir'] . '/befehlsbruecke.php';
+    }
+    $kand[] = dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php';
+    foreach ($kand as $k) {
+        if (is_file($k)) {
+            if (!defined('BB_NUR_LADEN')) {
+                define('BB_NUR_LADEN', true);
+            }
+            require_once $k;
+            return function_exists('bb_waechter');
+        }
+    }
+    return false;
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste(): EINE Quelle fuer Reiter und Vorlage). array(Liste|null, Fehlertext). */
+function ak_bruecke_liste()
+{
+    if (!ak_bruecke_laden()) {
+        return array(null, ak_t('BEFEHL.T_NICHT_DA'));
+    }
+    list($z, $fehler) = bb_zuordnung_laden();
+    if ($z === null) {
+        return array(null, $fehler);
+    }
+    $GLOBALS['bb_zuordnung'] = $z;
+    list($fehl) = bb_zuordnung_pruefen($z);
+    if ($fehl) {
+        return array(null, $fehl[0]);
+    }
+    return array(bb_liste($z, bb_einstellungen($z)), '');
+}
+
+/**
+ * Die Bruecke sofort schalten - nach dem Speichern im Reiter MQTT und nach dem Zurueckspielen einer Sicherung
+ * (Bauart fer_bruecke_schalten()). Soll sie laufen (befehle_mqtt_ein UND mqtt_ein): befehlsbruecke.sh start;
+ * sonst, wenn sie laeuft: stop. Rueckgabe array(rc oder null = nichts zu tun, 'start'|'stop'|'', Ausgabe).
+ */
+function ak_bruecke_schalten($cfg)
+{
+    if (!ak_bruecke_laden()) {
+        return array(1, '', ak_t('BEFEHL.T_NICHT_DA'));
+    }
+    $p = bb_pfade();
+    if (!$p) {
+        return array(1, '', ak_t('BEFEHL.T_KEINE_WURZEL'));
+    }
+    if (!empty($cfg['befehle_mqtt_ein']) && !empty($cfg['mqtt_ein'])) {
+        list($rc, $aus) = bb_sh($p, 'start');
+        return array($rc, 'start', $aus);
+    }
+    if (!bb_dienste()) {
+        return array(null, '', '');
+    }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    return array($rc, 'stop', $aus);
+}
+
+/** Meldungen fuer die Oberflaeche nach ak_bruecke_schalten(): array(ok-Meldungen, Fehlermeldungen), maskiert. */
+function ak_bruecke_meldungen($r)
+{
+    list($rc, $art, $aus) = $r;
+    if ($art === 'start') {
+        return $rc === 0 ? array(array(ak_t('BEFEHL.M_EIN') . ' ' . ak_e($aus)), array())
+                         : array(array(), array(sprintf(ak_t('BEFEHL.M_START_FEHL'), ak_e($aus))));
+    }
+    if ($art === 'stop') {
+        return $rc === 0 ? array(array(ak_t('BEFEHL.M_AUS')), array())
+                         : array(array(), array(sprintf(ak_t('BEFEHL.M_STOP_FEHL'), ak_e($aus))));
+    }
+    if ($rc !== null && $rc !== 0) {
+        return array(array(), array(sprintf(ak_t('BEFEHL.M_START_FEHL'), ak_e($aus))));
+    }
+    return array(array(), array());
+}
+
+/**
+ * Lage der Befehlsbruecke fuer Reiter Test und healthcheck: Dienst laeuft (argumentweise), zustand.json juenger
+ * als 180 s, Abo steht. Rueckgabe array(true|false|null, Text) - null heisst "aus" (Haken).
+ */
+function ak_bruecke_lage()
+{
+    if (!ak_bruecke_laden()) {
+        return array(false, ak_t('BEFEHL.T_NICHT_DA'));
+    }
+    if (!bb_pfade()) {
+        return array(null, ak_t('BEFEHL.T_KEINE_WURZEL'));
+    }
+    list($soll, $grund) = bb_soll_ermitteln();
+    if ($soll === 1) {
+        return array(null, ak_t('BEFEHL.T_AUS'));
+    }
+    if ($soll !== 0) {
+        return array(false, sprintf(ak_t('BEFEHL.T_DEFEKT'), ak_e($grund)));
+    }
+    $zu = bb_zustand_lesen();
+    $pids = bb_dienste();
+    $alter = (is_array($zu) && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if ($pids && $alter !== null && $alter <= BB_WACHE_GRENZE && !empty($zu['abo'])) {
+        $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+        $txt = sprintf(ak_t('BEFEHL.T_LAEUFT'), ak_e(implode(' ', $pids)),
+            ak_e(is_string($zu['abo']) ? $zu['abo'] : ''),
+            isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0, isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0);
+        $lz = (isset($zu['letzter']) && is_array($zu['letzter'])) ? $zu['letzter'] : null;
+        if ($lz !== null && isset($lz['name'])) {
+            $txt .= ' ' . sprintf(ak_t('BEFEHL.T_LETZTER'), ak_e((string) $lz['name']),
+                ak_e(isset($lz['ergebnis']) ? (string) $lz['ergebnis'] : '-'),
+                isset($lz['zeit']) ? max(0, time() - (int) $lz['zeit']) : 0);
+        } else {
+            $txt .= ' ' . ak_t('BEFEHL.T_KEINER');
+        }
+        return array(true, $txt);
+    }
+    $wie = !$pids ? ak_t('BEFEHL.W_KEIN_DIENST') : ($alter === null ? ak_t('BEFEHL.W_KEIN_ZUSTAND')
+        : ($alter > BB_WACHE_GRENZE ? sprintf(ak_t('BEFEHL.W_ALT'), $alter)
+        : ak_t('BEFEHL.W_OHNE_ABO') . (is_array($zu) && !empty($zu['fehler']) ? ': ' . ak_e($zu['fehler']) : '')));
+    return array(false, sprintf(ak_t('BEFEHL.T_STEHT'), $wie));
+}
+
+/**
+ * Die Befehle der Brueckenvorlage VQ_ankersolix_steuern.xml (Entwurf 3.1/3.3, E-E2, E-E20): Titel wie im
+ * Musterprojekt und in jeder Sprache gleich (es sind Objektnamen wie die Gateway-Namen, nicht Beschriftungen) -
+ * Musterprojekt ("Anker: Hauslast setzen (W)" ..., Anlage 2-9 mit Ziffer "Anker 2: ..."), Befehl
+ * "publish <praefix>/befehl/<name> <wert>" an den UDP-Eingang des Gateways. Die Themen kommen aus bb_liste()
+ * (eine Quelle mit dem Abo der Bruecke); laesst sich die Bruecke nicht laden, aus derselben Regel.
+ * Rueckgabe Liste von array('titel', 'ein', 'analog', 'kommentar').
+ */
+function ak_vo_befehle_mqtt($nummer = 1)
+{
+    $cfg = ak_config(false);
+    $w = ak_topic_gueltig($cfg['mqtt_topic']) ? (string) $cfg['mqtt_topic'] : 'ankersolix';
+    $nummer = max(1, min(9, (int) $nummer));
+    $vor = $nummer === 1 ? '' : $nummer . '/';
+    $themen = array();
+    list($l) = ak_bruecke_liste();
+    if (is_array($l)) {
+        foreach ($l['befehle'] as $b) {
+            $themen[$b['name']] = $b['thema'];
+        }
+    }
+    $thema = function ($name) use ($themen, $w, $vor, $nummer) {
+        $muster = ($nummer === 1 || $name === 'abruf') ? $name : '{nr}/' . $name;
+        $t = isset($themen[$muster]) ? $themen[$muster] : $w . '/befehl/' . $muster;
+        return str_replace('{nr}', (string) $nummer, $t);
+    };
+    $titel = $nummer === 1 ? 'Anker: ' : 'Anker ' . $nummer . ': ';
+    $aus = array(
+        array($titel . 'Hauslast setzen (W)', 'publish ' . $thema('hauslast') . ' <v.0>', true, ''),
+        array($titel . 'Betriebsart Eigenverbrauch', 'publish ' . $thema('modus') . ' eigenverbrauch', false, ''),
+        array($titel . 'Betriebsart Manuell', 'publish ' . $thema('modus') . ' manuell', false, ''),
+        array($titel . 'Betriebsart Smart', 'publish ' . $thema('modus') . ' smart', false, ''),
+        array($titel . 'Betriebsart Zeitfenster', 'publish ' . $thema('modus') . ' zeitfenster', false, ''),
+        array($titel . 'Entladegrenze setzen (Proz)', 'publish ' . $thema('reserve') . ' <v.0>', true, ''),
+        array($titel . 'Netzeinspeisung freigeben', 'publish ' . $thema('einspeisung') . ' 1', false, ''),
+        array($titel . 'Netzeinspeisung sperren', 'publish ' . $thema('einspeisung') . ' 0', false, ''),
+        array($titel . 'Einspeisegrenze setzen (W)', 'publish ' . $thema('einspeisegrenze') . ' <v.0>', true, ''),
+        array($titel . 'Notstromreserve setzen (Proz)', 'publish ' . $thema('notstromreserve') . ' <v.0>', true, ''),
+    );
+    if ($nummer === 1) {
+        $aus[] = array($titel . 'Sofort abrufen', 'publish ' . $thema('abruf') . ' 1', false, '');
+    }
+    return $aus;
+}
+
+/** Die Brueckenvorlage VQ_ankersolix_steuern.xml (VirtualOut an /dev/udp/<LoxBerry>/<Udpinport>, ohne Token). */
+function ak_vo_vorlage_mqtt($nummer = 1)
+{
+    $nummer = max(1, min(9, (int) $nummer));
+    $host = preg_replace('/:[0-9]+\z/', '', ak_host());
+    $z = array('<?xml version="1.0" encoding="utf-8"?>');
+    $z[] = '<VirtualOut HintText="" Title="' . ak_x('AnkerSolix steuern' . ($nummer > 1 ? ' ' . $nummer : '') . ' (MQTT)')
+         . '" Comment="' . ak_x(ak_t('VO.MQTT_KOMMENTAR')) . '" Address="' . ak_x('/dev/udp/' . $host . '/' . ak_udp_port())
+         . '" CmdInit="" CloseAfterSend="true" CmdSep="">';
+    $z[] = "\t" . '<Info templateType="3" minVersion="17010727"/>';
+    foreach (ak_vo_befehle_mqtt($nummer) as $b) {
+        $z[] = "\t" . '<VirtualOutCmd Title="' . ak_x($b[0]) . '" Comment="' . ak_x('Anker SOLIX: ' . preg_replace('/^Anker( [0-9])?: /', '', $b[0]) . ' (MQTT), nie retain')
+            . '" CmdOnMethod="GET" CmdOffMethod="GET" CmdOn="' . ak_x($b[1])
+            . '" CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer=""'
+            . ($b[2] ? ' Analog="true"' : '') . ' Repeat="0" RepeatRate="0"'
+            . ($b[2] ? ' SourceValLow="0" DestValLow="0" SourceValHigh="10" DestValHigh="10"' : '') . ' HintText=""/>';
+    }
+    $z[] = '</VirtualOut>';
+    return array('VQ_ankersolix_steuern' . ($nummer > 1 ? $nummer : '') . '.xml', implode("\n", $z) . "\n");
+}
+
+/* ---------------- Abraeumen anstossen (K22, E-E9) ---------------- */
+
+/**
+ * Das Abraeumen mit Ruecklesen fuer ein Praefix ABGEKOPPELT starten (ankersolix.py --abraeumen <praefix>) - die
+ * Seite wartet nicht die 6 s am Broker ab (Bauart Marstek: Deskriptoren > 2 geschlossen, kein Erbe der
+ * Sperren). Das Ergebnis steht im Protokoll und als Einmalmeldung beim naechsten Seitenaufbau. Kein Kennwort in
+ * der Befehlszeile - der Dienst liest den Broker-Zugang selbst. Rueckgabe gestartet | kein_start | ungueltig.
+ */
+function ak_abraeumen_anstossen($praefix)
+{
+    if (!ak_topic_gueltig($praefix)) {
+        return 'ungueltig';
+    }
+    $p = ak_paths();
+    $py = $p['bindir'] . '/venv/bin/python3';
+    $skript = $p['bindir'] . '/ankersolix.py';
+    if ($p['home'] === '' || !is_file($py) || !is_file($skript)) {
+        return 'kein_start';
+    }
+    $log = $p['log'];
+    $befehl = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; '
+            . 'erg=$(' . escapeshellarg($py) . ' ' . escapeshellarg($skript) . ' --abraeumen ' . escapeshellarg($praefix)
+            . ' 2>&1 | head -n 5 | tr -d "\r"); '
+            . 'printf "[%s] INFO Abraeumen (Reiter MQTT): %s\n" "$(date "+%Y-%m-%d %H:%M:%S")" "$erg" >> '
+            . escapeshellarg($log);
+    @exec('bash -c ' . escapeshellarg($befehl) . ' </dev/null >/dev/null 2>&1 &', $aus, $rc);
+    return $rc === 0 ? 'gestartet' : 'kein_start';
+}
+
+/** Die Praefixe, unter denen der Dienst je retained gesendet hat (Merker und Zweitschrift, K22) - nur gelesen. */
+function ak_gemerkte_praefixe()
+{
+    $p = ak_paths();
+    $aus = array();
+    $dateien = array($p['datadir'] . '/mqtt_praefixe.json');
+    if ($p['home'] !== '') {
+        $dateien[] = $p['home'] . '/config/plugins/' . $p['plugin'] . '.mqtt_praefixe.json';
+    }
+    foreach ($dateien as $f) {
+        $d = ak_json_lesen($f);
+        if (isset($d['praefixe']) && is_array($d['praefixe'])) {
+            foreach (array_keys($d['praefixe']) as $k) {
+                if (ak_topic_gueltig((string) $k)) {
+                    $aus[(string) $k] = true;
+                }
+            }
+        }
+    }
+    return array_keys($aus);
+}
+
+/**
+ * Nach dem Speichern im Reiter MQTT und nach dem Zurueckspielen (K22, V1): jedes Praefix, unter dem retained
+ * gesendet wurde und das jetzt nicht mehr das Sendepraefix ist ("MQTT aus" oder Praefixwechsel), abgekoppelt
+ * abraeumen lassen - auch wenn MQTT schon vorher aus war, sofern es im Merker steht; danach die Bruecke schalten.
+ * $vorher: array(mqtt_ein, mqtt_topic) vor dem Speichern. Rueckgabe array(Meldungen, Beanstandungen), maskiert.
+ */
+function ak_nach_mqtt_speichern($vorher, $cfg)
+{
+    $ok = array();
+    $fehl = array();
+    $aktiv = !empty($cfg['mqtt_ein']) ? (string) $cfg['mqtt_topic'] : '';
+    $alt = ak_gemerkte_praefixe();
+    if (!empty($vorher[0]) && ak_topic_gueltig($vorher[1]) && !in_array($vorher[1], $alt, true)) {
+        $alt[] = (string) $vorher[1];
+    }
+    sort($alt);
+    foreach ($alt as $pr) {
+        if ($pr === $aktiv) {
+            continue;
+        }
+        $r = ak_abraeumen_anstossen($pr);
+        if ($r === 'gestartet') {
+            $ok[] = sprintf(ak_t('MQTT.M_ABRAEUMEN'), ak_e($pr));
+        } else {
+            $fehl[] = sprintf(ak_t('MQTT.M_ABRAEUMEN_NICHT'), ak_e($pr));
+        }
+    }
+    list($bo, $bf) = ak_bruecke_meldungen(ak_bruecke_schalten($cfg));
+    return array(array_merge($ok, $bo), array_merge($fehl, $bf));
+}
+
+/* ---------------- Lebenszeichen, Monatssumme, Strompreis (Reiter Test, healthcheck) ---------------- */
+
+/** Was der Dienst zuletzt als Lebenszeichen gerechnet hat (zustand.json), oder null. */
+function ak_lebenszeichen()
+{
+    $zu = ak_zustand();
+    return (isset($zu['lebenszeichen']) && is_array($zu['lebenszeichen'])) ? $zu['lebenszeichen'] : null;
+}
+
+/**
+ * status/ok des Dienstes gegen OK des Endpunkts (N5): dieselbe Grenze (3 x wirksamer Takt) in zwei Sprachen.
+ * Rueckgabe array(stand, text).
+ */
+function ak_lebenszeichen_abgleich($cfg)
+{
+    $lz = ak_lebenszeichen();
+    if ($lz === null || !isset($lz['ok'], $lz['ts'])) {
+        return array(-1, ak_t('TEST.A_LEBEN_UNBEKANNT'));
+    }
+    $l = ak_loxone();
+    $alter = ak_alter();
+    $ok_ep = (!empty($l['ok']) && $alter >= 0 && $alter <= ak_ok_grenze($cfg)) ? 1 : 0;
+    $vor = max(0, time() - (int) $lz['ts']);
+    $grenze_d = isset($lz['grenze']) ? (int) $lz['grenze'] : -1;
+    if ($grenze_d !== ak_ok_grenze($cfg)) {
+        return array(0, sprintf(ak_t('TEST.A_LEBEN_GRENZE'), $grenze_d, ak_ok_grenze($cfg)));
+    }
+    $txt = sprintf(ak_t('TEST.A_LEBEN'), (int) $lz['zaehler'], $vor, (int) $lz['ok'], $ok_ep,
+        !empty($lz['gesendet']) ? ak_t('TEST.A_LEBEN_GESENDET') : ak_t('TEST.A_LEBEN_NICHT_GESENDET'));
+    if ($vor > 150) {
+        return array(0, $txt . ' ' . ak_t('TEST.A_LEBEN_ALT'));
+    }
+    // Zwischen dem Lebenszeichen und jetzt kann die Grenze ueberschritten worden sein - dann nur Hinweis.
+    return array((int) $lz['ok'] === $ok_ep ? 1 : -1, $txt);
+}
+
+/** Monatssumme Dienst (anlage1 'monat') gegen ak_energie_summe() (N3, E-E7) - Feld pv. */
+function ak_monat_abgleich()
+{
+    $a = ak_anlagen();
+    if (!isset($a['1']) || !isset($a['1']['monat']) || !is_array($a['1']['monat'])) {
+        return array(-1, ak_t('TEST.A_MONAT_UNBEKANNT'));
+    }
+    $d = $a['1']['monat']['pv'];
+    $e = ak_energie_summe(1, 'monat');
+    $e = $e['pv'];
+    if ($d === null && $e === null) {
+        return array(-1, ak_t('TEST.A_MONAT_LEER'));
+    }
+    $gleich = ($d !== null && $e !== null && abs((float) $d - (float) $e) < 0.006);
+    return array($gleich ? 1 : 0, sprintf(ak_t('TEST.A_MONAT'), $d === null ? '-1' : ak_e($d), $e === null ? '-1' : ak_e($e)));
+}
+
+/**
+ * Die Lage der Preisquelle haus/strompreis (V2b, E-E10) aus zustand.json - die Oberflaeche oeffnet keine eigene
+ * Verbindung. Rueckgabe array(stand, text, lage): stand 1 = Preise da, -1 = aus oder schweigt (Hinweis),
+ * 0 = unbrauchbar/deckt die Stunde nicht.
+ */
+function ak_preis_lage($cfg)
+{
+    if (empty($cfg['strompreis_ein'])) {
+        return array(-1, ak_t('PREIS.AUS'), 'aus');
+    }
+    $zu = ak_zustand();
+    $p = (isset($zu['preis']) && is_array($zu['preis'])) ? $zu['preis'] : null;
+    if ($p === null || !isset($p['lage'])) {
+        return array(-1, ak_t('PREIS.NOCH_NICHT'), 'unbekannt');
+    }
+    switch ((string) $p['lage']) {
+        case 'haus':
+            $h = array();
+            foreach ((isset($p['guenstigste']) && is_array($p['guenstigste'])) ? $p['guenstigste'] : array() as $t) {
+                $h[] = date('H', (int) $t);
+            }
+            return array(1, sprintf(ak_t('PREIS.HAUS'), ak_e(str_replace('.', ',', (string) $p['jetzt_ct'])),
+                (int) $p['rang'], (int) $p['stunden'], ak_e(implode(', ', $h)),
+                ak_e(isset($p['anbieter']) ? (string) $p['anbieter'] : '-')), 'haus');
+        case 'schweigt':
+            $s = isset($p['seit_s']) ? (int) $p['seit_s'] : -1;
+            return array(-1, $s >= 0 ? sprintf(ak_t('PREIS.SCHWEIGT'), $s) : ak_t('PREIS.NIE'), 'schweigt');
+        case 'aus':
+            return array(-1, ak_t('PREIS.DIENST_AUS') . (!empty($p['grund']) ? ' (' . ak_e($p['grund']) . ')' : ''), 'aus');
+        case 'deckt_stunde_nicht':
+            return array(0, ak_t('PREIS.DECKT_NICHT'), 'deckt_stunde_nicht');
+    }
+    return array(0, sprintf(ak_t('PREIS.UNBRAUCHBAR'), ak_e(isset($p['grund']) ? (string) $p['grund'] : '-')), 'unbrauchbar');
+}
+
+/** Fassung von paho-mqtt im venv (N10) - nur im offenen Reiter Test (startet Python). */
+function ak_paho_fassung()
+{
+    $py = ak_paths()['bindir'] . '/venv/bin/python3';
+    if (!is_file($py)) {
+        return '';
+    }
+    $ausgabe = array();
+    @exec(escapeshellcmd($py) . ' -c ' . escapeshellarg(
+        'import importlib.metadata as m; print(m.version("paho-mqtt"))') . ' 2>/dev/null', $ausgabe);
+    return trim(implode('', $ausgabe));
+}
+
+/* ---------------- healthcheck (V4, E-E14; Bauart Docker NG 1.3.20) ---------------- */
+
+/**
+ * Der Befund fuer bin/healthcheck - nur aus Dateien, die es gibt: keine Cloud-Anfrage, kein Broker.
+ * Rueckgabe array(status, text): 3 Fehler, 4 Warnung, 6 Hinweis, 5 in Ordnung (Skala von LoxBerry).
+ */
+function ak_gesundheit()
+{
+    $p = ak_paths();
+    if ($p['home'] === '') {
+        return array(3, ak_t('HEALTH.UNVOLLSTAENDIG'));
+    }
+    $cfg = ak_config(false);
+    $z = ak_zugang();
+    $pid = ak_dienst_pid();
+    $alter = ak_alter();
+    // 3: Dienst soll laufen und laeuft nicht, oder ok seit melden_alter nicht mehr.
+    if (ak_dienst_soll() && $pid === 0) {
+        return array(3, ak_t('HEALTH.DIENST_STEHT'));
+    }
+    if ($pid > 0 && $alter > (int) $cfg['melden_alter']) {
+        return array(3, sprintf(ak_t('HEALTH.CLOUD_STILL'), (int) floor($alter / 60)));
+    }
+    // 4: Waechter griff in den letzten 24 h, Bruecke haengt, MQTT ohne Gateway-Eingang.
+    list($wn, $wz) = ak_waechter_stand();
+    $wt = $wz !== '' ? strtotime($wz) : false;
+    if ($wn > 0 && $wt !== false && time() - $wt < 86400) {
+        return array(4, sprintf(ak_t('HEALTH.WAECHTER'), (int) $wn, $wz));
+    }
+    if (!empty($cfg['befehle_mqtt_ein']) && !empty($cfg['mqtt_ein'])) {
+        list($bs, $bt) = ak_bruecke_lage();
+        if ($bs === false) {
+            return array(4, ak_t('HEALTH.BRUECKE') . ' ' . strip_tags($bt));
+        }
+    }
+    if (!empty($cfg['mqtt_ein']) && (int) ak_mqtt_zustand()['udpport'] === 0) {
+        return array(4, ak_t('HEALTH.KEIN_UDP'));
+    }
+    // 6: noch nicht eingerichtet; Preisquelle schweigt.
+    if ($z['email'] === '' || $z['laenge'] === 0) {
+        return array(6, ak_t('HEALTH.NICHT_EINGERICHTET'));
+    }
+    if (!empty($cfg['strompreis_ein'])) {
+        list($ps, $pt, $pl) = ak_preis_lage($cfg);
+        if ($pl !== 'haus') {
+            return array(6, ak_t('HEALTH.PREIS') . ' ' . strip_tags($pt));
+        }
+    }
+    if ($pid === 0) {
+        return array(6, ak_t('HEALTH.DIENST_AUS'));
+    }
+    return array(5, sprintf(ak_t('HEALTH.OK'), $alter < 0 ? '-' : (string) $alter, count(ak_anlagen())));
 }
 
 /* ---------------- Verlauf ---------------- */
@@ -2285,10 +3178,23 @@ function ak_abo_text()
  */
 function ak_mqtt_themen()
 {
+    /* Alle Themen, die der Dienst veroeffentlicht, mit ihrer Bedeutung - die Liste
+     * IST die Anleitung (Sendeliste, Reiter, Namenstabelle, Hakenliste). Sie wird
+     * an den Sendecode angeglichen, nicht umgekehrt; der Reiter Test misst beide
+     * gegeneinander (ankersolix.py --themen).
+     *
+     * Seit 0.9.32: das Lebenszeichen status/zaehler, ok, alter, fehler (fest alle
+     * 60 s, E5/E-E5) und je Anlage die Summen des laufenden Monats und Jahres
+     * (N3, E-E7). ok, ts und fehler an der Wurzel gehen noch eine Fassung weiter
+     * (E-E6) und tragen in der Namenstabelle "alt". */
     return array(
         'ok'                          => 'AK_MQTT.OK',
         'ts'                          => 'AK_MQTT.TS',
         'fehler'                      => 'AK_MQTT.FEHLER',
+        'status/zaehler'              => 'AK_MQTT.ST_ZAEHLER',
+        'status/ok'                   => 'AK_MQTT.ST_OK',
+        'status/alter'                => 'AK_MQTT.ST_ALTER',
+        'status/fehler'               => 'AK_MQTT.ST_FEHLER',
         'anlagen'                     => 'AK_MQTT.ANLAGEN',
         'anlageN/soc'                 => 'AK_MQTT.SOC',
         'anlageN/pv'                  => 'AK_MQTT.PV',
@@ -2316,6 +3222,18 @@ function ak_mqtt_themen()
         'anlageN/zaehler/haus'        => 'AK_MQTT.Z_HAUS',
         'anlageN/zaehler/netzbezug'   => 'AK_MQTT.Z_NETZBEZUG',
         'anlageN/zaehler/netzeinspeisung' => 'AK_MQTT.Z_NETZEINSP',
+        'anlageN/monat/pv'            => 'AK_MQTT.M_PV',
+        'anlageN/monat/batterie_geladen'   => 'AK_MQTT.M_LADEN',
+        'anlageN/monat/batterie_abgegeben' => 'AK_MQTT.M_ENTLADEN',
+        'anlageN/monat/haus'          => 'AK_MQTT.M_HAUS',
+        'anlageN/monat/netzbezug'     => 'AK_MQTT.M_NETZBEZUG',
+        'anlageN/monat/netzeinspeisung' => 'AK_MQTT.M_NETZEINSP',
+        'anlageN/jahr/pv'             => 'AK_MQTT.J_PV',
+        'anlageN/jahr/batterie_geladen'   => 'AK_MQTT.J_LADEN',
+        'anlageN/jahr/batterie_abgegeben' => 'AK_MQTT.J_ENTLADEN',
+        'anlageN/jahr/haus'           => 'AK_MQTT.J_HAUS',
+        'anlageN/jahr/netzbezug'      => 'AK_MQTT.J_NETZBEZUG',
+        'anlageN/jahr/netzeinspeisung' => 'AK_MQTT.J_NETZEINSP',
         'geraet/<SN>/soc'             => 'AK_MQTT.G_SOC',
         'geraet/<SN>/pv'              => 'AK_MQTT.G_PV',
         'geraet/<SN>/ausgang'         => 'AK_MQTT.G_AUSGANG',
@@ -2427,6 +3345,10 @@ function ak_retain_themen()
  */
 function ak_retain_abgleich()
 {
+    /* Die Retain-Tabelle pruefen: lesbar, nicht leer, nur Themen der Liste, und
+     * weder Lebenszeichen noch Dienstaussage darin (ok, ts, fehler und seit 0.9.32
+     * status/* - Regeln/07, Entscheidungen 03.09., 18.09. und 19.09.2026).
+     * Rueckgabe: array(stand, text) */
     $r = ak_retain_themen();
     if ($r === null) {
         return array(-1, ak_t('TEST.A_RETAIN_UNBEKANNT'));
@@ -2436,7 +3358,12 @@ function ak_retain_abgleich()
     }
     $liste = array_keys(ak_mqtt_themen());
     $fremd = array_values(array_diff($r, $liste));
-    $leben = array_values(array_intersect($r, array('ok', 'ts', 'fehler')));
+    $leben = array();
+    foreach ($r as $ak_rt) {
+        if (in_array($ak_rt, array('ok', 'ts', 'fehler'), true) || strpos($ak_rt, 'status/') === 0) {
+            $leben[] = $ak_rt;
+        }
+    }
     $s = array();
     if ($fremd) { $s[] = ak_t('TEST.A_RETAIN_FREMD') . ': ' . ak_e(implode(', ', $fremd)); }
     if ($leben) { $s[] = ak_t('TEST.A_RETAIN_LEBEN') . ': ' . ak_e(implode(', ', $leben)); }
@@ -2838,6 +3765,16 @@ function ak_vorlage($satz = 'status', $nummer = 1, $sn = '')
  */
 function ak_vo_vorlage($nummer = 1)
 {
+    /* Die HTTP-Vorlage der Steuerbefehle (Virtueller Ausgang mit Aktionstoken) - seit 0.9.32 der "alte Weg" fuer
+     * bestehende Anlagen (Reiter Einbindung, "Bestehende Anlagen: HTTP-Endpunkt"), Dateiname
+     * VQ_ankersolix_steuern_HTTP.xml; der Name VQ_ankersolix_steuern.xml gehoert der Brueckenvorlage
+     * (ak_vo_vorlage_mqtt(), Entwurf 2.10). Neu: "Betriebsart Zeitfenster" (V2a, E-E20).
+     *
+     * Format wie ein Original-Export aus Loxone Config 17.1. Uebernommen aus
+     * LoxBerry-Plugin-MarstekVenus-1.0.15 (marstek_vo_vorlage) - dort geprueft.
+     *
+     * ACHTUNG: die Datei enthaelt das Aktionstoken im Klartext. Das steht auch im
+     * Kommentar der Datei selbst, damit es niemand weitergibt. */
     $p = ak_paths();
     $nummer = max(1, min(99, (int) $nummer));
     $crlf = "\r\n";
@@ -2853,6 +3790,7 @@ function ak_vo_vorlage($nummer = 1)
         array(ak_t('VO.EIGEN'),     array('aktion' => 'modus', 'anlage' => $nummer, 'wert' => 'eigenverbrauch'), '', false),
         array(ak_t('VO.MANUELL'),   array('aktion' => 'modus', 'anlage' => $nummer, 'wert' => 'manuell'), '', false),
         array(ak_t('VO.SMART'),     array('aktion' => 'modus', 'anlage' => $nummer, 'wert' => 'smart'), '', false),
+        array(ak_t('VO.ZEITFENSTER'), array('aktion' => 'modus', 'anlage' => $nummer, 'wert' => 'zeitfenster'), '', false),
         array(ak_t('VO.RESERVE'),   array('aktion' => 'reserve', 'anlage' => $nummer), 'prozent=<v>', true),
         array(ak_t('VO.EINSP_AUS'), array('aktion' => 'einspeisung', 'anlage' => $nummer, 'wert' => 'aus'), '', false),
         array(ak_t('VO.EINSP_EIN'), array('aktion' => 'einspeisung', 'anlage' => $nummer, 'wert' => 'ein'), '', false),
@@ -2885,7 +3823,7 @@ function ak_vo_vorlage($nummer = 1)
         $o .= 'Analog="' . (!empty($c[3]) ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
     }
     $o .= '</VirtualOut>' . $crlf;
-    return array('ankersolix_steuern' . $nummer . '.xml', $o);
+    return array('VQ_ankersolix_steuern' . ($nummer > 1 ? $nummer : '') . '_HTTP.xml', $o);
 }
 
 /**
@@ -2899,6 +3837,14 @@ function ak_vo_vorlage($nummer = 1)
  */
 function ak_vorlagen_paket()
 {
+    /* Alles auf einmal: jede HTTP-Vorlage, die zu dieser Anlage gehoert, in EINEM
+     * Archiv - der alte Weg fuer bestehende Anlagen (seit 0.9.32 im Abschnitt
+     * "Bestehende Anlagen: HTTP-Endpunkt"). Die Brueckenvorlage gehoert nicht
+     * hinein: sie traegt kein Token und hat ihren eigenen Knopf.
+     *
+     * Rueckgabe: array(name, inhalt) - ein ZIP, wenn die Erweiterung da ist,
+     * sonst null. ZipArchive steht NICHT in dpkg/apt, ist also nicht zugesichert
+     * und wird mit class_exists() geprueft. */
     if (!class_exists('ZipArchive')) {
         return null;
     }
@@ -2927,12 +3873,15 @@ function ak_vorlagen_paket()
         $zip->addFromString($d[0], $d[1]);
     }
     $zip->addFromString('LIESMICH.txt',
-        "Anker SOLIX - Loxone-Vorlagen\r\n"
+        "Anker SOLIX - Loxone-Vorlagen (HTTP-Weg fuer bestehende Anlagen)\r\n"
         . "Erzeugt am " . date('d.m.Y H:i') . "\r\n\r\n"
-        . "ankersolix_anlageN.xml    Virtuelle Eingaenge, Leistungswerte (Takt 60 s)\r\n"
-        . "ankersolix_energieN.xml   Virtuelle Eingaenge, Energiewerte (Takt 300 s)\r\n"
-        . "ankersolix_geraet_SN.xml  Virtuelle Eingaenge je Geraet\r\n"
-        . "ankersolix_steuernN.xml   Virtueller Ausgang mit den Steuerbefehlen\r\n\r\n"
+        . "ankersolix_anlageN.xml          Virtuelle Eingaenge, Leistungswerte (Takt 60 s)\r\n"
+        . "ankersolix_energieN.xml         Virtuelle Eingaenge, Energiewerte (Takt 300 s)\r\n"
+        . "ankersolix_geraet_SN.xml        Virtuelle Eingaenge je Geraet\r\n"
+        . "VQ_ankersolix_steuern_HTTP.xml  Virtueller Ausgang mit den Steuerbefehlen\r\n\r\n"
+        . "Neue Anlagen brauchen das nicht: Werte ueber MQTT (Namenstabelle im Reiter\r\n"
+        . "Einbindung in Loxone), Befehle ueber die Befehlsbruecke (VQ_ankersolix_steuern.xml).\r\n"
+        . "Der Lesezweig des Endpunkts antwortet nur mit dem Haken endpunkt_ein.\r\n\r\n"
         . "ACHTUNG: die Dateien enthalten das Aktionstoken im Klartext.\r\n"
         . "Wer sie weitergibt, gibt den Zugriff auf die Anlage mit weiter.\r\n\r\n"
         . "Loxone Config legt beim Import NEU an und ueberschreibt nichts -\r\n"
@@ -2966,9 +3915,22 @@ function ak_vorlagen_paket()
  */
 function ak_endpunkt_probe($frist = 3)
 {
+    /* Ruft den eigenen Endpunkt wirklich auf (aktion=selftest - bleibt auch bei
+     * endpunkt_ein 0 offen, E-E21). Seit 0.9.32 am Port des LoxBerry-Webservers
+     * aus general.json (K13, Bauform Marstek 1.1.27 M4) und ohne Umleitungen.
+     *
+     * Drei Ausgaenge, nicht zwei. Der dritte ist wichtig: ein Webserver, der nur
+     * eine Anfrage zugleich bearbeitet, kann sich waehrend des Seitenaufbaus nicht
+     * selbst aufrufen. Ein Kreuz waere dort ein Kreuz, das nichts bedeutet.
+     *
+     * 127.0.0.1 ist hier die RICHTIGE Adresse - das gilt fuer einen Aufruf vom
+     * Server aus, nicht fuer einen Knopf, den ein Mensch im Browser anklickt.
+     *
+     * Rueckgabe: array(stand, text). stand 1 = Haken, 0 = Kreuz, -1 = Hinweis. */
     $p = ak_paths();
     $pfad = '/plugins/' . $p['plugin'] . '/index.php?token=' . rawurlencode(ak_token()) . '&aktion=selftest';
-    $url = 'http://127.0.0.1' . $pfad;
+    $port = ak_webserver_port();
+    $url = 'http://127.0.0.1' . ($port !== 80 ? ':' . $port : '') . $pfad;
     $rumpf = '';
     $code = 0;
     $fehler = '';
@@ -2978,6 +3940,7 @@ function ak_endpunkt_probe($frist = 3)
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, (int) $frist);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, (int) $frist);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
         curl_setopt($ch, CURLOPT_HTTPHEADER, array('Host: ' . ak_host()));
         $rumpf = (string) curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -2990,7 +3953,7 @@ function ak_endpunkt_probe($frist = 3)
         // Ohne die curl-Erweiterung ueber Streams. php-curl steht NICHT in
         // dpkg/apt, ist also nicht zugesichert - deshalb function_exists().
         $ctx = stream_context_create(array('http' => array(
-            'timeout' => (int) $frist, 'ignore_errors' => true,
+            'timeout' => (int) $frist, 'ignore_errors' => true, 'follow_location' => 0,
             'header' => 'Host: ' . ak_host() . "\r\n",
         )));
         list($ak_roh, $code) = ak_http_abruf($url, $ctx);
@@ -3071,17 +4034,10 @@ function ak_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        $home = getenv('LBHOMEDIR');
-        if (!$home || !is_dir($home)) {
-            foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-                if (is_dir($k)) {
-                    $home = $k;
-                    break;
-                }
-            }
-        }
-        $ordner = basename(dirname(__FILE__));
-        $pfad = $home . '/templates/plugins/' . $ordner . '/lang';
+        /* K12 (seit 0.9.32): die Sprachdateien ueber ak_paths() - installiert unter
+         * <wurzel>/templates/plugins/<ordner>/lang, sonst im Archiv. Kein fester
+         * Systempfad mehr; fehlt der Anlagenordner (Pruefstand), gilt das Archiv. */
+        $pfad = ak_paths()['lang'];
         if (!is_dir($pfad)) {
             $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
         }
@@ -3214,10 +4170,11 @@ function ak_sicherung_lesen($roh, &$namen = null)
     $ak_wb = array();
     foreach (array_keys(ak_vorgaben()) as $fk) {
         if (!array_key_exists($fk, $daten)) {
-            /* Energie-1 C1: eine Sicherung von VOR der Schreiber-Wache (0.9.26/0.9.27)
-             * kennt deren Einstellungen nicht. Sie ist trotzdem vollstaendig; die
-             * geltenden Werte der Wache bleiben, und die Seite sagt es. */
-            if (in_array($fk, ak_wache_schluessel(), true)) {
+            /* Eine Sicherung von VOR einer Fassung kennt deren Einstellungen nicht: die Schreiber-Wache
+             * (Energie-1 C1, 0.9.28) und seit 0.9.32 endpunkt_ein, befehle_mqtt_ein, strompreis_ein
+             * (E-E13, ak_sicherung_spaeter()). Sie ist trotzdem vollstaendig; die GELTENDEN Werte bleiben,
+             * und die Seite sagt es. Ohne diese Ausnahme waere keine 0.9.31-Sicherung zurueckspielbar. */
+            if (in_array($fk, ak_sicherung_spaeter(), true)) {
                 $ak_wb[] = $fk;
                 continue;
             }
@@ -3229,7 +4186,22 @@ function ak_sicherung_lesen($roh, &$namen = null)
         foreach ($ak_wb as $fk) {
             $neu[$fk] = $ak_wj[$fk];
         }
-        $hinweise[] = sprintf(ak_t('EINST.SICH_WACHE_BEHALTEN'), ak_e(implode(', ', $ak_wb)));
+        $hinweise[] = sprintf(ak_t('EINST.SICH_SPAETER'), ak_e(implode(', ', $ak_wb)));
+    }
+    /* K3/K14 (seit 0.9.32): je Anlage min nicht ueber max - gegen den GELTENDEN Wert (ein leeres Feld gilt mit
+     * der allgemeinen Grenze dieser Datei). Bis 0.9.31 wurde nur bei zwei gefuellten Feldern verglichen: min
+     * 3000 bei allgemein max 1600 sperrte jede Hauslast der Anlage. */
+    if (isset($daten['anlagen_grenzen']) && !in_array('anlagen_grenzen', $namen, true)
+        && is_array($neu['anlagen_grenzen'])) {
+        foreach ($neu['anlagen_grenzen'] as $ak_gnr => $ak_gg) {
+            $ak_glo = ((string) $ak_gg['min'] === '') ? (int) $neu['hauslast_min'] : (int) $ak_gg['min'];
+            $ak_ghi = ((string) $ak_gg['max'] === '') ? (int) $neu['hauslast_max'] : (int) $ak_gg['max'];
+            if ($ak_glo > $ak_ghi) {
+                $mangel[] = sprintf(ak_t('EINST.FEHLER_GRENZE_TAUSCH'), ak_e($ak_gnr));
+                $namen[] = 'anlagen_grenzen';
+                break;
+            }
+        }
     }
     if ($fehlend) {
         $namen = array_merge($namen, $fehlend);
@@ -3296,9 +4268,18 @@ function ak_sicherung_wert($k, $w)
  */
 function ak_sicherung_grenzen_gueltig($w)
 {
+    /* anlagen_grenzen so, wie das Formular sie baut: je Anlagennummer (1-99)
+     * genau min und max, jedes '' oder eine ganze Zahl 0..5000 (als Zeichenkette
+     * wie aus dem Formular, oder als Zahl). Seit 0.9.32 (K3/K14) die Obergrenze
+     * aus ak_zahlgrenzen() statt 9999; die Kreuzpruefung min <= max gegen den
+     * GELTENDEN Wert (leeres Feld = allgemeiner Wert) macht ak_sicherung_lesen(),
+     * die die allgemeinen Grenzen der Datei kennt. */
     if (!is_array($w)) {
         return false;
     }
+    $zg = ak_zahlgrenzen();
+    $gu = $zg['hauslast_min'][0];
+    $go = $zg['hauslast_max'][1];
     foreach ($w as $nr => $g) {
         if (!preg_match('/^[1-9][0-9]?\z/', (string) $nr) || !is_array($g)) {
             return false;
@@ -3311,15 +4292,12 @@ function ak_sicherung_grenzen_gueltig($w)
         foreach (array('min', 'max') as $f) {
             $v = $g[$f];
             if (is_int($v)) {
-                if ($v < 0 || $v > 9999) {
+                if ($v < $gu || $v > $go) {
                     return false;
                 }
-            } elseif (!is_string($v) || ($v !== '' && !preg_match('/^[0-9]{1,4}\z/', $v))) {
+            } elseif (!is_string($v) || ($v !== '' && (!preg_match('/^[0-9]{1,4}\z/', $v) || (int) $v > $go))) {
                 return false;
             }
-        }
-        if ((string) $g['min'] !== '' && (string) $g['max'] !== '' && (int) $g['min'] > (int) $g['max']) {
-            return false;
         }
     }
     return true;
@@ -3410,17 +4388,19 @@ function ak_eingabe_felder($form)
             'haken'  => array('ohne_details', 'ohne_energie', 'ohne_prognose', 'zaehler_ein',
                               'steuerung_ein', 'melden_ein',
                               // Energie-1 C1, Schreiber-Wache
-                              'wache_ein', 'wache_lb_melden', 'wache_sperren_ein'),
+                              'wache_ein', 'wache_lb_melden', 'wache_sperren_ein',
+                              // seit 0.9.32 (V2b)
+                              'strompreis_ein'),
             // Grenzen je Anlage: gmin_<nr>, gmax_<nr>
             'muster' => '/^g(min|max)_[1-9][0-9]?\z/',
         ),
         'mqtt' => array(
             'text'   => array('mqtt_topic'),
-            'haken'  => array('mqtt_ein', 'mqtt_nur_aenderung'),
+            'haken'  => array('mqtt_ein', 'mqtt_nur_aenderung', 'befehle_mqtt_ein'),
             'muster' => '',
         ),
         'test' => array(
-            'text'   => array('test_anlage', 'test_watt', 'test_prozent', 'test_modus', 'test_trocken'),
+            'text'   => array('test_anlage', 'test_watt', 'test_prozent', 'test_modus', 'test_trocken', 'test_sn'),
             'haken'  => array(),
             'muster' => '',
         ),

@@ -20,5 +20,8 @@
 # git           anker-solix-api steht NICHT auf PyPI. postinstall.sh holt die
 #               Bibliothek mit "pip install git+https://github.com/..." vom
 #               Tag v3.6.3; ohne git bricht das ab.
+# mosquitto-clients  mosquitto_sub/_pub fuer die Befehlsbruecke (seit 0.9.32; im LoxBerry-
+#               Grundabbild ohnehin vorhanden; Hausform der Brueckenlinien).
 python3-venv
 git
+mosquitto-clients

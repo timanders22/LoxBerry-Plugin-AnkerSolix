@@ -3,3 +3,6 @@
 # Startet den Dienst neu, wenn er laufen soll, aber nicht laeuft.
 # Den bin-Pfad des Plugins setzt der Installer in der Befehlszeile ein.
 "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>&1
+# Seit 0.9.32 (E-E3): der Waechter der Befehlsbruecke - die Linie hat keinen PHP-Minutentakt
+# (Form BLE 1.3.28 / WOLF ISM NG 3.1.13). Die Bruecke liest Marke, Haken und Praefix selbst.
+[ -f "REPLACELBPBINDIR/befehlsbruecke.sh" ] && /bin/bash "REPLACELBPBINDIR/befehlsbruecke.sh" waechter >/dev/null 2>&1

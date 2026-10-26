@@ -142,25 +142,37 @@ function ak_vorlage_probe()
  */
 function ak_bausteinnamen_probe()
 {
+    /* Heissen die Eingaenge und Befehle der Baustein-Listen so, wie Gateway und Vorlage sie anlegen?
+     *
+     * Seit 0.9.32 (Gruppe 26): die Listen nennen Virtuelle Eingaenge mit Gateway-Namen (ankersolix_status_ok ...)
+     * und Befehle am Ausgang "LoxBerry MQTT-Gateway" ("Anker: Hauslast setzen (W)" ...). Jeder Gateway-Name der
+     * Linie muss in der Namenstabelle stehen (ak_mqtt_namenstabelle(), Anlage 1, Praefix ankersolix), jeder
+     * Befehlsname in der Brueckenvorlage (ak_vo_befehle_mqtt(1)). Bis 0.9.31 hielt diese Zeile die Namen der
+     * HTTP-Vorlagen (ANKER_1_OK ...) gegen die Importdateien - die Lehre aus 0.9.7 bleibt: geprueft wird, was
+     * die Tabelle FERTIG nennt, nicht der Quelltext. EVCC-Namen gehoeren dem EVCC-Plugin und bleiben aussen vor. */
+    $namen = array();
+    foreach (ak_mqtt_namenstabelle(array('mqtt_topic' => 'ankersolix')) as $ne) {
+        $namen[$ne['name']] = true;
+    }
     $titel = array();
-    foreach (array(ak_vorlage('status', 1), ak_vorlage('energie', 1), ak_vo_vorlage(1)) as $ak_v) {
-        if (preg_match_all('/<(?:VirtualInHttpCmd|VirtualOutCmd)\s[^>]*?Title="([^"]*)"/', $ak_v[1], $m)) {
-            foreach ($m[1] as $t) {
-                $titel[html_entity_decode($t, ENT_QUOTES | ENT_XML1, 'UTF-8')] = true;
-            }
-        }
+    foreach (ak_vo_befehle_mqtt(1) as $b) {
+        $titel[$b[0]] = true;
     }
     $fehlt = array();
     $n = 0;
-    foreach (ak_bl_seiten() as $seite) {
+    foreach (ak_bausteinseiten() as $seite) {
         foreach ($seite['zeilen'] as $nr => $z) {
-            if ($z[4] === '') {
-                continue;
-            }
-            $n++;
-            $name = ak_bl_text($z[1]);
-            if (!isset($titel[$name])) {
-                $fehlt[] = $seite['seite'] . ' #' . $nr . ' ' . $name;
+            $c = array_pad(explode(' | ', (string) $z, 4), 4, '');
+            if (strpos($c[1], 'ankersolix_') === 0) {
+                $n++;
+                if (!isset($namen[$c[1]])) {
+                    $fehlt[] = $seite['kopf'] . ' #' . $nr . ' ' . $c[1];
+                }
+            } elseif (strpos($c[1], 'Anker: ') === 0) {
+                $n++;
+                if (!isset($titel[$c[1]])) {
+                    $fehlt[] = $seite['kopf'] . ' #' . $nr . ' ' . $c[1];
+                }
             }
         }
     }
@@ -307,6 +319,22 @@ function ak_pruefungen()
     $mqttEin = !empty($cfg['mqtt_ein']);
     $zeilen[] = ak_pruefzeile($mqttEin ? 1 : -1, ak_t('TEST.F_MQTT_EIN'),
         ak_t($mqttEin ? 'TEST.A_MQTT_EIN_JA' : 'TEST.A_MQTT_EIN_NEIN'));
+
+    /* Seit 0.9.32: Lebenszeichen status/* (Dienst gegen Endpunkt, N5), Monatssumme (Dienst gegen Endpunkt, N3),
+     * Abnehmer haus/strompreis (V2b), paho-Fassung (N10), Befehlsbruecke (V1), Lesezweig (E-E21). */
+    list($stand, $text) = ak_lebenszeichen_abgleich($cfg);
+    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_LEBEN'), $text);
+    list($stand, $text) = ak_monat_abgleich();
+    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_MONAT'), $text);
+    list($stand, $text) = ak_preis_lage($cfg);
+    $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_PREIS'), $text);
+    $ak_pf = ak_paho_fassung();
+    $zeilen[] = ak_pruefzeile($ak_pf !== '' ? 1 : -1, ak_t('TEST.F_PAHO'),
+        $ak_pf !== '' ? 'paho-mqtt ' . ak_e($ak_pf) : ak_t('TEST.A_PAHO_FEHLT'));
+    list($ak_bs, $ak_bt) = ak_bruecke_lage();
+    $zeilen[] = ak_pruefzeile($ak_bs === true ? 1 : ($ak_bs === null ? -1 : 0), ak_t('TEST.F_BRUECKE'), $ak_bt);
+    $zeilen[] = ak_pruefzeile(-1, ak_t('TEST.F_LESEZWEIG'),
+        ak_t(!empty($cfg['endpunkt_ein']) ? 'TEST.A_LESEZWEIG_EIN' : 'TEST.A_LESEZWEIG_AUS'));
 
     $m = ak_mqtt_zustand();
     if (!$m['gefunden']) {
@@ -512,18 +540,31 @@ function ak_test_aktion($aktion, &$feld = null)
 function ak_trockenlauf_aktion()
 {
     $aktion = isset($_POST['test_trocken']) ? (string) $_POST['test_trocken'] : 'hauslast';
-    if (!in_array($aktion, array('hauslast', 'modus', 'reserve'), true)) {
+    if (!array_key_exists($aktion, ak_trocken_aktionen())) {
         $aktion = 'hauslast';
     }
     $anlage = isset($_POST['test_anlage']) ? (int) $_POST['test_anlage'] : 1;
+    $sn = (isset($_POST['test_sn']) && is_string($_POST['test_sn'])) ? preg_replace('/[^A-Za-z0-9]/', '', $_POST['test_sn']) : '';
     if ($aktion === 'modus') {
         $wert = isset($_POST['test_modus']) ? (string) $_POST['test_modus'] : 'eigenverbrauch';
-    } elseif ($aktion === 'reserve') {
+    } elseif ($aktion === 'reserve' || $aktion === 'notstromreserve') {
         $wert = isset($_POST['test_prozent']) ? (int) $_POST['test_prozent'] : 10;
+    } elseif ($aktion === 'einspeisung_ein' || $aktion === 'einspeisung_aus') {
+        $wert = $aktion === 'einspeisung_ein' ? 'ein' : 'aus';
+        $aktion = 'einspeisung';
     } else {
         $wert = isset($_POST['test_watt']) ? (int) $_POST['test_watt'] : 0;
     }
-    return array($aktion, ak_trockenlauf($aktion, $anlage, $wert));
+    return array($aktion, ak_trockenlauf($aktion, $anlage, $wert, $sn));
+}
+
+/** Die Auswahl des Trockenlaufs (K18, seit 0.9.32): alle sieben Befehle des Endpunkts, Einspeisung in beiden Richtungen. */
+function ak_trocken_aktionen()
+{
+    return array('hauslast' => 'TEST.K_HAUSLAST', 'modus' => 'TEST.K_MODUS', 'reserve' => 'TEST.K_RESERVE',
+                 'einspeisung_aus' => 'TEST.K_EINSP_AUS', 'einspeisung_ein' => 'TEST.K_EINSP_EIN',
+                 'einspeisegrenze' => 'TEST.K_GRENZE', 'notstromreserve' => 'TEST.K_NOTSTROM',
+                 'pvlimit' => 'TEST.K_PVLIMIT');
 }
 
 /** Mini-SVG: Ladezustand ueber einen Tag (0 bis 24 h, 0 bis 100 %). */

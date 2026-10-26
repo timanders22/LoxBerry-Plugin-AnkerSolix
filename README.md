@@ -16,6 +16,44 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.32
+
+**Werte und Befehle über das MQTT-Gateway** – die Hausform der übrigen Plugins. Der HTTP-Endpunkt bleibt für
+bestehende Anlagen.
+
+* **MQTT ab Werk an** für Neuinstallationen; eine bestehende Anlage behält ihren Stand (ist MQTT aus, sagt es
+  die Installation).
+* **Lebenszeichen** `status/zaehler`, `status/ok`, `status/alter`, `status/fehler` fest jede Minute – auch
+  während die Cloud schweigt. `ok`, `ts` und `fehler` an der Wurzel gehen noch eine Fassung weiter und
+  entfallen danach.
+* **Ohne Aussage -1** bei Zahlen und `-` bei Texten statt gar nichts; fällt `status/ok` auf 0, gehen die
+  Messwerte einmal als -1 hinaus. Neu: `anlageN/monat/*` und `anlageN/jahr/*`.
+* **Namenstabelle** im Reiter *Einbindung in Loxone* mit den Namen, die das Gateway in Loxone anlegt
+  (`ankersolix_status_ok`, `ankersolix_anlage1_soc` …), Kopierknopf und der Liste der 25 Haken für Gateway V2.
+* **Befehle über MQTT** (Befehlsbrücke 1.0.1): Haken „Befehle über MQTT annehmen“ im Reiter MQTT, ab Werk aus;
+  `ankersolix/befehl/hauslast`, `modus`, `reserve`, `einspeisung`, `einspeisegrenze`, `notstromreserve`
+  (Anlage 2–9: `…/befehl/<nr>/…`) und `abruf`, Antwort unter `…/quittung`. Dieselben Prüfungen wie der HTTP-Weg;
+  der Schreiber heißt `mqtt`. Vorlage `VQ_ankersolix_steuern.xml` (ohne Token), die HTTP-Vorlage heißt jetzt
+  `VQ_ankersolix_steuern_HTTP.xml` und kennt die Betriebsart **Zeitfenster**.
+* **Die Hauslast wirkt bei Solarbank 2 und 3 nur in der Betriebsart Manuell (oder Steckdosen).** Erst
+  „modus manuell“, dann die Hauslast – das Plugin lehnt sonst ab und sagt warum (`MODUS_<n>: …`), statt einen
+  wirkungslosen Befehl als gesendet zu melden.
+* **HTTP-Lesezweig** (`status`, `energie`, `geraet`, `anlagen`, `roh`) nur mit dem Haken
+  „HTTP-Lesezweig für Loxone annehmen“ – nach einem Update an, bei einer Neuinstallation aus.
+* **Abräumen mit Rücklesen:** beim Ausschalten von MQTT, bei einem neuen Präfix, beim Zurückspielen und bei der
+  Deinstallation räumt das Plugin seine zurückbehaltenen Themen am Broker ab und liest nach – auch wenn MQTT
+  schon aus war.
+* **Strompreis (Anzeige):** Abnehmer von `haus/strompreis` (Reiter Einstellungen, ab Werk aus) – Preis jetzt,
+  Rang der Stunde und die günstigsten Stunden neben der Betriebsart „Zeitfenster“. Gesteuert wird damit nichts.
+* **LoxBerry-Healthcheck** (`bin/healthcheck`): Dienst, letzter Abruf, Wächter, Befehlsbrücke – ohne Cloud.
+* Berichtigt: Rechte der Zweitschrift beim Update (0600), Grenzen je Anlage 0–5000 W und gegen den geltenden
+  Wert, Protokoll leeren mit Bestätigungshäkchen (beide Logdateien), Hilfelink auf die eigene Wikiseite,
+  Tagwahl bleibt im Reiter, Wurzel und Archivschutz der Bibliothek, Port des Webservers für die Selbstprüfung,
+  `.kaputt`-Abschrift 0600, Endpunkt ohne PHP-Meldungen und ohne Zwischenspeicher, Deinstallation mit
+  Wurzelprüfung, Trockenlauf aller sieben Befehle (PPS „nur lesend“), Wächter legt den Logordner an,
+  Zählwerk zählt jede Cloud-Anfrage, Selbstprüfung nur im geöffneten Reiter Test.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät gemessen (im Haus gibt es kein Anker-Gerät).
+
 ## Version 0.9.31
 
 Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt): der Reiter
@@ -645,6 +683,11 @@ in einer Warteschlange ab.
 
 ## Endpunkte für Loxone
 
+Seit 0.9.32 ist der HTTP-Endpunkt der Weg für **bestehende** Anlagen: Werte kommen über MQTT, Befehle über
+die Befehlsbrücke (unten). Der Lesezweig (`status`, `energie`, `geraet`, `anlagen`, `roh`) antwortet nur mit dem
+Haken „HTTP-Lesezweig für Loxone annehmen“ (`endpunkt_ein`; nach einem Update an, bei einer Neuinstallation aus),
+sonst HTTP 403 `ANKER;OK=0;GRUND=ENDPUNKT_AUS`. `selftest` und die schaltenden Aufrufe mit Token bleiben offen.
+
 Alle Aufrufe brauchen das Token aus dem Reiter *Einbindung in Loxone*. Wie die Bausteine in
 Loxone Config verdrahtet werden, zeigt derselbe Reiter mit zwei Baustein-Listen und Bildern aus
 dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt).
@@ -741,21 +784,44 @@ unangemeldeten Bereich. Sie stehen im Reiter *Test*.
 
 ## Was das Plugin über MQTT sendet
 
-Dieselben Werte wie über HTTP, dazu `ok`, **`ts`** und `fehler`. Über MQTT gibt
-es kein „Alter“ — beim Senden ist es immer null. Deshalb wird der *Zeitstempel
-des letzten erfolgreichen Abrufs* veröffentlicht, und die Gegenseite rechnet.
-Ohne ihn ist ein toter Dienst von einem gesunden nicht zu unterscheiden.
+Seit 0.9.32 ist MQTT der Regelweg (Präfix ab Werk `ankersolix`, über den UDP-Eingang des MQTT-Gateways). Die
+Namen in Loxone bildet das Gateway aus Präfix und Thema: `ankersolix_status_ok`, `ankersolix_anlage1_soc` –
+die Namenstabelle im Reiter *Einbindung in Loxone* nennt alle.
 
-Bei einem Fehlschlag gehen ausschließlich `ok=0`, `ts` und `fehler` hinaus. Die
-Messwerte behalten ihren Stand — sonst überschriebe man gute Daten mit alten
-und verkaufte es als frisch.
+| Thema | Wert | zurückbehalten |
+|---|---|---|
+| `status/zaehler` | Lebenszeichen, 0–999, jede Minute +1 – auch wenn die Cloud schweigt | nein |
+| `status/ok` | 1 = letzter Abruf erfolgreich und nicht älter als drei Takte, sonst 0 (Gateway V2: „Noncached“) | nein |
+| `status/alter` | Sekunden seit dem letzten erfolgreichen Abruf, -1 noch nie | nein |
+| `status/fehler` | Klartext der letzten Störung, `-` keine | nein |
+| `anlageN/soc`, `pv`, `laden`, `entladen`, `batp`, `ausgang`, `haus`, `netzbezug`, `netzeinspeisung`, `prognose` | Messwerte, -1 ohne Aussage | nein |
+| `anlageN/sollwert`, `modus`, `reserve`, `einspeisung`, `einspeisegrenze`, `name` | Zustände, -1 bzw. `-` ohne Aussage | ja |
+| `anlageN/energie/*`, `zaehler/*`, `monat/*`, `jahr/*` | heute, Zählerstand, laufender Monat, laufendes Jahr (kWh) | nein |
+| `geraet/<SN>/…` | je Gerät, die Seriennummer steht im Namen | teils |
+| `ok`, `ts`, `fehler` | alt, gehen noch eine Fassung weiter | nein |
+
+Fehlt ein Wert in der Antwort der Cloud, geht -1 (Zahl) bzw. `-` (Text) hinaus – nie eine erfundene Null und
+kein stehengebliebener alter Wert. Fällt `status/ok` auf 0, gehen die Messwerte einmal als -1 hinaus; die
+Zustände bleiben stehen. Beim Ausschalten von MQTT, bei einem neuen Präfix, beim Zurückspielen und bei der
+Deinstallation räumt das Plugin seine zurückbehaltenen Themen am Broker ab und liest zurück.
+
+**Befehle** (Haken „Befehle über MQTT annehmen“, ab Werk aus; zusätzlich „Schreibende Befehle zulassen“):
+`publish ankersolix/befehl/hauslast <W>`, `modus eigenverbrauch|steckdosen|manuell|zeitplan|smart|zeitfenster`,
+`reserve <Proz>`, `einspeisung 1|0`, `einspeisegrenze <W>`, `notstromreserve <Proz>`, `abruf 1`; Anlage 2–9 unter
+`ankersolix/befehl/<nr>/…`. Nie retained. Die Antwort steht unter `…/quittung`, das Lebenszeichen der Brücke
+unter `ankersolix/status/befehle`. `pvlimit` bleibt beim HTTP-Weg (es braucht die Seriennummer).
+
+**Strompreis:** Mit dem Haken „Strompreis vom Spotpreis-Plugin anzeigen“ liest der Dienst `haus/strompreis/*`
+über eine Dauerverbindung am Broker (Frist 120 s am Zähler des Anbieters) und zeigt Preis, Rang und die
+günstigsten Stunden an. Er schreibt nichts unter `haus/` und steuert damit nichts.
 
 ## Datenschutz
 
 Es sind keine persönlichen Daten im Plugin enthalten. Zugangsdaten und alle
 Einstellungen liegen ausschließlich in der lokalen Konfiguration. Verbindungen
-gibt es nur zur Anker-Cloud. Die Deinstallation entfernt auch die Sicherung
-außerhalb des Plugin-Ordners, in der die Zugangsdaten liegen.
+gibt es zur Anker-Cloud und – für das Abräumen mit Rücklesen und die Strompreis-Anzeige – zum MQTT-Broker
+des LoxBerry (Zugang aus general.json, das Kennwort steht in keiner Befehlszeile). Die Deinstallation entfernt
+auch die Sicherung außerhalb des Plugin-Ordners, in der die Zugangsdaten liegen.
 
 ## Lizenz
 

@@ -35,6 +35,18 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     BASE=$(cd "$SELF/../../.." 2>/dev/null && pwd)
 fi
+# K17 (seit 0.9.32, Form preinstall.sh): der Ordnername darf keinen Pfadtrenner
+# tragen, und Wurzel ist nur, was config/plugins, data/plugins UND
+# config/system/general.json traegt (Regeln/06) - sonst griffen rm und mv
+# daneben. Bis 0.9.31 genuegte ein Verzeichnis.
+case "$PFOLDER" in
+    ''|*/*|.|..) echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER' - nichts angefasst."; exit 1 ;;
+esac
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ] \
+   || [ ! -f "$BASE/config/system/general.json" ]; then
+    echo "<WARNING> Kein LoxBerry-Wurzelverzeichnis erkannt ('$BASE') - nichts angefasst."
+    exit 1
+fi
 
 PBIN="$BASE/bin/plugins/$PFOLDER"
 PCONFIG="$BASE/config/plugins/$PFOLDER"
@@ -99,6 +111,51 @@ ak_dienste_beenden() {
     [ -n "$ak_rest" ] && kill -9 $ak_rest 2>/dev/null
     echo $ak_ziel
 }
+
+# ---------- 0. Die Befehlsbruecke (seit 0.9.32, E-E3; Bauart Ferien 1.2.29) ----------
+# Vor allem anderen anhalten (stop beendet Dienst und mosquitto_sub, auch ein
+# verwaistes), argumentweise nachzaehlen, die Optionsdateien mit dem
+# Broker-Kennwort ueberschreiben und den Ordner befehle/ entfernen. Im Broker
+# bleibt nichts: Quittungen und status/befehle sind nie zurueckbehalten.
+BBSH="$PBIN/befehlsbruecke.sh"
+BBPHP="$PBIN/befehlsbruecke.php"
+BBDIR="$BASE/data/plugins/$PFOLDER/befehle"
+if [ -f "$BBSH" ]; then
+    timeout 40 bash "$BBSH" stop
+fi
+BB_REST=0
+for d in /proc/[0-9]*; do
+    mapfile -d '' -t a 2>/dev/null < "$d/cmdline" || continue
+    if [ "${#a[@]}" -eq 2 ] && [ "${a[1]}" = "$BBPHP" ] && [[ "${a[0]}" =~ (^|/)php[0-9.]*$ ]]; then
+        kill -9 "${d#/proc/}" 2>/dev/null
+        BB_REST=$((BB_REST + 1))
+    fi
+done
+BB_ABOS=0
+for d in /proc/[0-9]*; do
+    read -r c 2>/dev/null < "$d/comm" || continue
+    [ "$c" = "mosquitto_sub" ] || continue
+    mapfile -d '' -t e 2>/dev/null < "$d/environ" || continue
+    for x in "${e[@]}"; do
+        if [ "$x" = "XDG_CONFIG_HOME=$BBDIR/mosquitto" ]; then kill -9 "${d#/proc/}" 2>/dev/null; BB_ABOS=$((BB_ABOS + 1)); fi
+    done
+done
+[ "$BB_REST" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $BB_REST Dienst(e) erst mit kill -9 beendet."
+[ "$BB_ABOS" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $BB_ABOS mosquitto_sub erst mit kill -9 beendet."
+if [ -d "$BBDIR" ]; then
+    for f in "$BBDIR/mosquitto/mosquitto_sub" "$BBDIR/mosquitto/mosquitto_pub"; do
+        if [ -f "$f" ]; then
+            n=$(stat -c %s "$f" 2>/dev/null || echo 64)
+            head -c "$n" /dev/zero > "$f" 2>/dev/null
+        fi
+    done
+    rm -rf "${BBDIR:?}"
+fi
+if [ -e "$BBDIR/mosquitto/mosquitto_sub" ] || [ -e "$BBDIR/mosquitto/mosquitto_pub" ]; then
+    echo "<WARNING> Befehlsbruecke: Optionsdateien liegen noch unter $BBDIR/mosquitto - von Hand entfernen."
+elif [ -f "$BBSH" ]; then
+    echo "<OK> Befehlsbruecke angehalten, ihre Zugangsdaten entfernt."
+fi
 
 # ---------- 1. Dienst anhalten ----------
 if [ -x "$DIENST" ]; then
@@ -172,17 +229,25 @@ fi
 # Seit 0.9.22 gehen Zustaende retained hinaus (Entscheidung des Hausherrn
 # 29.09.2026). Ohne dieses Abraeumen blieben sie nach dem Entfernen fuer immer
 # im Broker und kaemen nach jedem Neustart von Gateway oder Miniserver als
-# frisch heraus. Nur eigene Themen unter dem eingestellten Praefix und nur,
-# wenn MQTT eingeschaltet war. Die Themen kommen aus MQTT_RETAINED im Dienst
-# und dem letzten Abbild - deshalb VOR dem Abraeumen des Datenordners, und
-# NACH dem Anhalten, damit der Dienst nichts nachschiebt.
+# frisch heraus. Seit 0.9.32 (K22, E-E9): mit Ruecklesen am Broker, je Praefix,
+# unter dem je retained gesendet wurde (Merker data/<o>/mqtt_praefixe.json und
+# seine Zweitschrift config/plugins/<o>.mqtt_praefixe.json) - auch bei
+# mqtt_ein = 0. NACH dem Anhalten, damit der Dienst nichts nachschiebt, und VOR
+# dem Abraeumen des Datenordners. Als loxberry, wenn dieses Skript als root
+# laeuft (es liest und sendet nur), hoechstens 60 s, mit LBHOMEDIR und
+# LBPPLUGINDIR (K17). Das Broker-Kennwort liest der Dienst selbst aus
+# general.json - es steht in keiner Befehlszeile (Regeln/05).
 AK_PY="$PY"
 [ -x "$AK_PY" ] || AK_PY=$(command -v python3 2>/dev/null)
 if [ -n "$AK_PY" ] && [ -f "$SKRIPT" ]; then
-    if command -v timeout >/dev/null 2>&1; then
-        ABR=$(LBHOMEDIR="$BASE" timeout -k 5 60 "$AK_PY" "$SKRIPT" --abraeumen 2>/dev/null)
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        ABR=$(su -s /bin/bash loxberry -c "$(printf '%q ' env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PFOLDER" \
+            timeout -k 5 60 "$AK_PY" "$SKRIPT" --abraeumen)" < /dev/null 2>/dev/null)
+    elif command -v timeout >/dev/null 2>&1; then
+        ABR=$(env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PFOLDER" timeout -k 5 60 "$AK_PY" "$SKRIPT" --abraeumen \
+            < /dev/null 2>/dev/null)
     else
-        ABR=$(LBHOMEDIR="$BASE" "$AK_PY" "$SKRIPT" --abraeumen 2>/dev/null)
+        ABR=$(env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PFOLDER" "$AK_PY" "$SKRIPT" --abraeumen < /dev/null 2>/dev/null)
     fi
     ABR_RC=$?
     if [ -n "$ABR" ]; then
@@ -204,7 +269,14 @@ for f in ankersolix.json zugang.json; do
         fi
     done
 done
+# K17 (seit 0.9.32): Nebendateien eines abgebrochenen Sicherns (preupgrade.sh,
+# <name>.neu.<pid>) tragen dieselben Geheimnisse.
+for BKN in "$BASE/config/plugins/$PFOLDER".backup.*.neu.*; do
+    [ -f "$BKN" ] && rm -f "$BKN" && ANZAHL=$((ANZAHL + 1))
+done
 rm -rf "$BASE/data/plugins/$PFOLDER"
+# Die Zweitschrift des Praefix-Merkers (K22, seit 0.9.32).
+rm -f "$BASE/config/plugins/$PFOLDER.mqtt_praefixe.json"
 
 # Die beiden Merker, die preupgrade.sh NEBEN den Ordnern anlegt. Sie
 # ueberstehen jedes Abraeumen des Installers, weil sie eine Ebene darueber

@@ -17,6 +17,11 @@
  *   anlagen                     Liste der erkannten Anlagen
  *   roh                         umgesetztes Abbild als JSON (Fehlersuche)
  *
+ * Seit 0.9.32 (Entscheidung 2, E-E21): der Lesezweig fuer Loxone (status, energie, geraet, anlagen, roh)
+ * antwortet nur mit dem Haken "HTTP-Lesezweig fuer Loxone annehmen" (endpunkt_ein; Update an,
+ * Neuinstallation aus - Werte kommen ueber MQTT). Sonst HTTP 403 ANKER;OK=0;GRUND=ENDPUNKT_AUS und eine
+ * gebremste Protokollzeile. selftest und die schaltenden Aktionen mit Token bleiben offen.
+ *
  * Schaltende Aktionen (nur wenn im Reiter Einstellungen zugelassen):
  *   hauslast        &watt=<W>      [&anlage=N][&sn=..]
  *   modus           &wert=<Modus>  [&anlage=N][&sn=..]
@@ -71,8 +76,12 @@
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+// K16 (seit 0.9.32, Hausform Ferien/Marstek M2): keine PHP-Meldung in einer Antwort an Loxone, und keine
+// Antwort aus einem Zwischenspeicher - jede Zeile ist ein Zustand von jetzt.
+ini_set('display_errors', '0');
 require_once __DIR__ . '/ak_lib.php';
 header('Content-Type: text/plain; charset=utf-8');
+header('Cache-Control: no-store');
 
 /* Lesen, nicht anlegen.
  *
@@ -133,6 +142,18 @@ if (!in_array($ak_aktion, array_merge($ak_lesend, $ak_schaltend), true)) {
     http_response_code(400);
     echo "FEHLER;OK=0;GRUND=UNBEKANNTE_AKTION\n";
     echo 'Erlaubt sind: selftest, ' . implode(', ', array_merge($ak_lesend, $ak_schaltend)) . "\n";
+    exit;
+}
+
+/* ---------------- Lesezweig nur mit endpunkt_ein (seit 0.9.32, E-E21) ----------------
+ * Werte gehen an Loxone ueber MQTT (Namenstabelle im Reiter Einbindung). Der HTTP-Lesezweig bleibt fuer
+ * bestehende Anlagen: ein Update setzt endpunkt_ein auf 1 (Lese-Regel ak_uebergang() und postupgrade.sh),
+ * eine Neuinstallation laesst ihn aus. Ein weiter abfragender Virtueller HTTP-Eingang erzeugt hoechstens eine
+ * Protokollzeile je Fenster (ak_endpunkt_log, gebremst). */
+if (in_array($ak_aktion, $ak_lesend, true) && (int) $ak_cfg['endpunkt_ein'] !== 1) {
+    ak_endpunkt_log('endpunkt_aus', 'Lesezweig abgewiesen (endpunkt_ein = 0), Aktion ' . $ak_aktion_log);
+    http_response_code(403);
+    echo "ANKER;OK=0;GRUND=ENDPUNKT_AUS\n";
     exit;
 }
 
@@ -361,151 +382,16 @@ if ($ak_aktion === 'energie') {
 // Seriennummer bleibt draussen - Protokolle landen in Foren.
 ak_endpunkt_log('befehl', 'Aktion ' . $ak_aktion_log . ', Anlage ' . $ak_anlage);
 
-if ($ak_aktion !== 'abruf' && empty($ak_cfg['steuerung_ein'])) {
-    http_response_code(403);
-    echo "SET;OK=0;GRUND=STEUERUNG_AUS\n";
-    echo "Schreibende Befehle sind gesperrt. Reiter Einstellungen, Haken 'Schreibende Befehle zulassen'.\n";
-    exit;
+/* Seit 0.9.32 (E-E2): der Ablauf ab der Freigabe steht in ak_befehl_annehmen() (ak_lib.php) - EINE Stelle
+ * fuer diesen Endpunkt und die Befehlsbruecke (Kennung von=mqtt, Quelle mqtt). Freigabe 403, Dienst 503,
+ * Abrufbremse 503/429, Pflichtwerte 400, Schreiber-Wache 409, Gleichwert-Unterdrueckung, Einreihen mit
+ * quelle=endpunkt, Warten, Schrittweite - die Antworten sind byte-gleich mit 0.9.31 (Beleg ep_<k>.txt). */
+$ak_r = ak_befehl_annehmen(array('aktion' => $ak_aktion, 'anlage' => $ak_anlage, 'sn' => $ak_sn,
+    'watt' => $ak_watt, 'prozent' => $ak_prozent, 'wert' => $ak_wert), $ak_von, 'endpunkt', $ak_cfg);
+if ((int) $ak_r[0] !== 200) {
+    http_response_code((int) $ak_r[0]);
 }
-if (ak_dienst_pid() === 0) {
-    // Nicht stillschweigend einreihen: ohne laufenden Dienst passiert nichts,
-    // und der Befehl laege bis zum naechsten Start in der Warteschlange.
-    http_response_code(503);
-    echo "SET;OK=0;GRUND=DIENST_LAEUFT_NICHT\n";
-    echo "Der Abrufdienst laeuft nicht. Reiter Einstellungen, Knopf 'Dienst starten'.\n";
-    exit;
+foreach ($ak_r[3] as $ak_kopf) {
+    header($ak_kopf);
 }
-
-/* Sofortabruf hoechstens alle 30 s (Verbesserung a3 / X-7, 30.09.2026).
- * Bis 0.9.23 holte jeder Aufruf die ganze Cloud neu - ein flatternder
- * Ausgang trieb das Konto in die 429-Sperre. Faellt der Merker aus, wird
- * abgewiesen (503), nicht durchgelassen. */
-if ($ak_aktion === 'abruf') {
-    $ak_rest = ak_abruf_bremse();
-    if ($ak_rest < 0) {
-        http_response_code(503);
-        echo "SET;OK=0;AKTION=abruf;GRUND=BREMSE_MERKER\n";
-        exit;
-    }
-    if ($ak_rest > 0) {
-        http_response_code(429);
-        header('Retry-After: ' . $ak_rest);
-        echo 'SET;OK=0;AKTION=abruf;GRUND=BREMSE;WARTEN_S=' . $ak_rest . "\n";
-        exit;
-    }
-}
-
-$ak_befehl = array('aktion' => $ak_aktion, 'anlage' => $ak_anlage);
-if ($ak_sn !== '') {
-    $ak_befehl['sn'] = $ak_sn;
-}
-
-/* Welcher Parameter zu welcher Aktion gehoert - eine Stelle, kein
- * if-Treppenhaus. Ein Feld, das nur zu einer Aktion gehoert, wird bei den
- * anderen gar nicht erst uebernommen. */
-$ak_pflicht = array(
-    'hauslast'        => array('watt', $ak_watt, 'WATT_FEHLT'),
-    'einspeisegrenze' => array('watt', $ak_watt, 'WATT_FEHLT'),
-    'pvlimit'         => array('watt', $ak_watt, 'WATT_FEHLT'),
-    'reserve'         => array('prozent', $ak_prozent, 'PROZENT_FEHLT'),
-    'notstromreserve' => array('prozent', $ak_prozent, 'PROZENT_FEHLT'),
-    'modus'           => array('wert', $ak_wert, 'WERT_FEHLT'),
-    'einspeisung'     => array('wert', $ak_wert, 'WERT_FEHLT'),
-);
-if (isset($ak_pflicht[$ak_aktion])) {
-    list($ak_feld, $ak_v, $ak_grund) = $ak_pflicht[$ak_aktion];
-    if ($ak_v === '') {
-        http_response_code(400);
-        echo 'SET;OK=0;GRUND=' . $ak_grund . "\n";
-        exit;
-    }
-    $ak_befehl[$ak_feld] = ($ak_feld === 'wert') ? $ak_v : (int) $ak_v;
-}
-if ($ak_aktion === 'einspeisung' && !in_array($ak_wert, array('ein', 'aus'), true)) {
-    http_response_code(400);
-    echo "SET;OK=0;GRUND=WERT_UNZULAESSIG\n";
-    echo "Erlaubt sind: ein, aus\n";
-    exit;
-}
-if ($ak_aktion === 'pvlimit' && $ak_sn === '') {
-    // Eine Wechselrichter-Begrenzung gilt EINEM Geraet. Ohne Seriennummer
-    // waere nicht bestimmt, welches gemeint ist - und geraten wird nicht.
-    http_response_code(400);
-    echo "SET;OK=0;GRUND=SN_FEHLT\n";
-    exit;
-}
-
-/* Schreiber-Wache (Energie-1 C1, Entscheidung Nr. 25; Kopf der Funktionen in
- * ak_lib.php). VOR der Gleichwert-Unterdrueckung: auch ein Befehl, den sie als
- * unveraendert beantwortet, kommt von einem Schreiber. Ein abgewiesener Befehl
- * (409) wird nicht eingereiht und setzt den Merker "Sollwert empfangen" (Nr. 22)
- * nicht. Gleichwert, Schrittweite und Rueckfall bleiben, wie sie waren; der
- * Zusatz ;SCHREIBER=n / ;WACHE=MERKER haengt an jeder Antwort danach. */
-$ak_wache = ak_wache_anwenden($ak_aktion, isset($ak_befehl['wert']) ? $ak_befehl['wert'] : '', $ak_anlage, $ak_von);
-$ak_wz = $ak_wache['zusatz'];
-if ($ak_wache['abweisen']) {
-    http_response_code(409);
-    echo 'SET;OK=0;AKTION=' . $ak_aktion . ";GRUND=FREMDSCHREIBER\n";
-    echo 'Der Schreiber ' . $ak_wache['schreiber'] . ' steht nicht in der Liste der erlaubten Schreiber '
-       . "(Reiter Einstellungen, Schreiber-Wache). Nichts wurde eingereiht.\n";
-    exit;
-}
-
-/* Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026, Entscheidungen
- * Nr. 16 und 19; Vorbild EVCC 0.9.37). Erst sind Aktion und Wert geprueft
- * (oben), dann kommt die Unterdrueckung, dann das Einreihen. Der Merker bleibt
- * bis nach der Antwort des Dienstes gesperrt; laesst er sich nicht oeffnen,
- * faellt es geschlossen aus (503) - eingereiht wird dann nichts. */
-$ak_gw_schl = ak_gleichwert_schluessel($ak_befehl);
-$ak_gw = null;
-$ak_gw_merker = array();
-$ak_gw_wert = ak_gleichwert_wert($ak_befehl);
-if ($ak_gw_schl !== '') {
-    $ak_gw = ak_gleichwert_oeffnen();
-    if ($ak_gw === false) {
-        http_response_code(503);
-        echo 'SET;OK=0;AKTION=' . $ak_aktion . ';GRUND=GLEICHWERT_MERKER' . $ak_wz . "\n";
-        exit;
-    }
-    $ak_gw_merker = ak_gleichwert_lesen($ak_gw);
-    $ak_seit = ak_gleichwert_seit($ak_gw_merker, $ak_gw_schl, $ak_gw_wert);
-    if ($ak_seit >= 0) {
-        ak_gleichwert_schliessen($ak_gw, null);
-        // Derselbe Wert wie eben gesendet: Loxone lebt (Nr. 22).
-        ak_sollwert_empfangen_vermerken();
-        printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=Derselbe Wert ging vor %d s hinaus - nichts gesendet.%s\n",
-            $ak_aktion, $ak_seit, $ak_seit, $ak_wz);
-        exit;
-    }
-}
-
-// Die ungeheilte Konfiguration von oben (X-1): der Endpunkt schreibt nie
-// die Konfiguration aus der Zweitschrift zurueck, auch nicht beim Einreihen.
-// Kennzeichen fuer den Dienst (Nr. 22): nimmt er diesen Sollwert an
-// (ok=1, gesendet oder unveraendert), setzt ER den Merker "Sollwert
-// empfangen" - auch wenn hier niemand mehr auf die Antwort wartet (OK=2).
-// Die Gleichwert-Werte oben sind schon gebildet; quelle gehoert nicht dazu.
-if ($ak_gw_schl !== '') {
-    $ak_befehl['quelle'] = 'endpunkt';
-}
-$ak_abgesetzt = ak_befehl_absetzen($ak_befehl, null, $ak_cfg);
-list($ak_erg, $ak_meldung) = $ak_abgesetzt;
-// Innerhalb der Schrittweite (Nr. 21) ging nichts hinaus: der Merker behaelt
-// den zuletzt GESENDETEN Wert (leerer Schluessel - nur Abgelaufenes raeumen),
-// sonst hiesse es spaeter "Derselbe Wert ging vor n s hinaus" fuer einen Wert,
-// der nie hinausging.
-$ak_unveraendert = ($ak_erg === 1 && !empty($ak_abgesetzt[2]));
-if ($ak_gw !== null) {
-    ak_gleichwert_schliessen($ak_gw, ak_gleichwert_nachher($ak_gw_merker,
-        $ak_unveraendert ? '' : $ak_gw_schl, $ak_gw_wert, $ak_erg === 1));
-}
-if ($ak_erg === 0) {
-    http_response_code(500);
-}
-if ($ak_unveraendert) {
-    printf("SET;OK=1;AKTION=%s;UNVERAENDERT=1;MELDUNG=%s%s\n", $ak_aktion,
-        str_replace(array("\r", "\n", ';'), ' ', $ak_meldung), $ak_wz);
-    exit;
-}
-printf("SET;OK=%d;AKTION=%s;MELDUNG=%s%s\n", $ak_erg, $ak_aktion,
-    str_replace(array("\r", "\n", ';'), ' ', $ak_meldung), $ak_wz);
+echo $ak_r[1];

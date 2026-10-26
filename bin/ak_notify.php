@@ -36,7 +36,10 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            // Seit 0.9.32 dieselbe Wurzel wie ak_lib.php und der Dienst (K12/K25): mit data/plugins und
+            // config/system/general.json - ein Pruefarchiv unter der Wurzel ist keine Anlage.
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -48,7 +51,7 @@ if (!function_exists('lb_wurzel_ermitteln')) {
 }
 
 $home = getenv('LBHOMEDIR');
-if (!$home) {
+if (!$home || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) {
     $home = lb_wurzel_ermitteln();
 }
 $sdk = $home . '/libs/phplib/loxberry_log.php';

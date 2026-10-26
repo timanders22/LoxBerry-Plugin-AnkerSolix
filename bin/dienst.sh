@@ -413,6 +413,9 @@ case "$1" in
             printf '%s
 %s
 ' "$((N + 1))" "$(date '+%Y-%m-%d %H:%M:%S')" > "$ZAEHLER"
+            # K20 (seit 0.9.32, Haertung): fehlt der Logordner, scheiterte die Umlenkung unten vor
+            # starten() - und damit der Neustart (Probe k20 W1). LoxBerry legt ihn beim Hochfahren an.
+            mkdir -p "$PLOG" 2>/dev/null
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi

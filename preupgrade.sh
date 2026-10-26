@@ -38,6 +38,15 @@ else
     echo "<INFO> anlegen ($BASE/data/plugins/$PFOLDER.upgrade_laeuft)."
 fi
 
+# Die Befehlsbruecke anhalten (seit 0.9.32, E-E3; Bauart Ferien 1.2.29
+# preupgrade): die Marke liegt schon - der Waechter im Minutentakt startet sie
+# bis postupgrade.sh nicht neu. Bis 0.9.31 gab es keine Bruecke (dann fehlt die
+# Datei).
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    echo "<INFO> Befehlsbruecke: $(timeout 40 bash "$BBSH" stop 2>&1 | head -n 1)"
+fi
+
 # Anhalten ueber das Dienstskript, nicht von Hand.
 #
 # Frueher stand hier: kill, zwei Sekunden warten, dann BEDINGUNGSLOS kill -9.
@@ -282,11 +291,13 @@ for f in ankersolix.json zugang.json; do
         continue
     fi
     # Die Nebendatei liegt neben der Sicherung (dasselbe Dateisystem, also ist
-    # mv ein Umbenennen). zugang.json traegt das Passwort im Klartext: 0600,
-    # bevor die Datei ihren Namen bekommt.
+    # mv ein Umbenennen). zugang.json traegt das Passwort im Klartext,
+    # ankersolix.json das Aktionstoken: BEIDE 0600, bevor die Datei ihren Namen
+    # bekommt. K2 (seit 0.9.32): bis 0.9.31 nur zugang.json - cp -p trug die
+    # Rechte einer 0644-Konfiguration auf die Zweitschrift (Probe k2, Fall A/B).
     NEU="$BK.neu.$$"
-    if cp -p "$CF" "$NEU" 2>/dev/null \
-       && { [ "$ART" != zugang ] || chmod 600 "$NEU" 2>/dev/null; } \
+    if ( umask 077; cp -p "$CF" "$NEU" ) 2>/dev/null \
+       && chmod 600 "$NEU" 2>/dev/null \
        && cmp -s "$CF" "$NEU" && mv -f "$NEU" "$BK" 2>/dev/null; then
         echo "<INFO> $f gesichert."
     else
@@ -295,6 +306,20 @@ for f in ankersolix.json zugang.json; do
         echo "<WARNING> $f liess sich NICHT sichern; eine vorhandene Sicherung bleibt unveraendert."
     fi
 done
+# Hinweis (seit 0.9.32, E-E12): neue Anlagen senden ab Werk ueber MQTT; eine
+# bestehende behaelt ihren Stand. Gelesen wird nur, nichts geschrieben.
+if [ -f "$CFGDIR/ankersolix.json" ] && command -v php >/dev/null 2>&1; then
+    if php -r '
+        $d = json_decode((string) @file_get_contents($argv[1]), true);
+        if (!is_array($d)) { exit(1); }
+        $ein = false;
+        foreach (array_keys($d) as $k) { if ((string) $k !== "aktionstoken") { $ein = true; break; } }
+        exit(($ein && (!isset($d["mqtt_ein"]) || (int) $d["mqtt_ein"] !== 1)) ? 0 : 1);
+    ' -- "$CFGDIR/ankersolix.json" 2>/dev/null; then
+        echo "<INFO> MQTT ist in dieser Anlage aus. Neue Anlagen senden ab 0.9.32 ab Werk ueber MQTT -"
+        echo "<INFO> einschalten im Reiter MQTT (empfohlen; der HTTP-Endpunkt bleibt)."
+    fi
+fi
 if [ "$AK_WARN" = 0 ]; then
     echo "<OK> preupgrade abgeschlossen."
 else

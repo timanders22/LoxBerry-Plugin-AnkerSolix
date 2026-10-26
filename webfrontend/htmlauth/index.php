@@ -68,7 +68,8 @@ if ($ak_p['home'] !== '' && is_file($ak_p['home'] . '/libs/phplib/loxberry_syste
 if (ak_upgrade_laeuft()) {
     $ak_rahmen = class_exists('LBWeb', false);
     if ($ak_rahmen) {
-        LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/', 'help.html');
+        // K7 (seit 0.9.32): die eigene Wikiseite statt der Startseite des Wikis.
+        LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/plugins/ankersolix/start', 'help.html');
     }
     echo '<div style="max-width:980px;margin:0 auto;'
        . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
@@ -110,6 +111,13 @@ if (isset($_POST['activetab']) && preg_match($ak_muster, (string) $_POST['active
 } elseif (isset($_GET['form']) && preg_match($ak_muster, 'tab-' . (string) $_GET['form'])) {
     $ak_tab = 'tab-' . (string) $_GET['form'];
 }
+
+/* E2 (seit 0.9.32, Form Docker D22 / Beschattung B1): die Selbstpruefung samt HTTP-Selbstabfrage (bis 3 s) laeuft
+ * nur, wenn der Reiter Test AUSDRUECKLICH angefordert ist (GET index.php?form=test - auch die Umleitung nach einem
+ * POST aus dem Reiter) - nicht bei jedem Seitenaufruf (Regeln/04 :397). Das Reiter-JS laedt den Reiter Test
+ * deshalb neu, statt ihn nur einzublenden. */
+$ak_test_offen = (isset($_GET['form']) && $_GET['form'] === 'test'
+                  && (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET') !== 'POST');
 
 $ak_meldungen = array();   // Erfolgsmeldungen
 $ak_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
@@ -192,6 +200,9 @@ if ($ak_post && isset($_POST['vorlage'])) {
     $ak_datei = null;
     if ($ak_art === 'ausgang') {
         $ak_datei = ak_vo_vorlage($ak_nr);
+    } elseif ($ak_art === 'mqtt') {
+        // Seit 0.9.32 (E-E2): die Brueckenvorlage VQ_ankersolix_steuern.xml - ohne Token.
+        $ak_datei = ak_vo_vorlage_mqtt($ak_nr);
     } elseif ($ak_art === 'alles') {
         $ak_datei = ak_vorlagen_paket();
         if ($ak_datei === null) {
@@ -254,7 +265,9 @@ if ($ak_post && isset($_POST['speichern'])) {
     foreach (array('steuerung_ein', 'zaehler_ein', 'melden_ein',
                    'ohne_details', 'ohne_energie', 'ohne_prognose',
                    // Schreiber-Wache (Energie-1 C1)
-                   'wache_ein', 'wache_lb_melden', 'wache_sperren_ein') as $ak_haken) {
+                   'wache_ein', 'wache_lb_melden', 'wache_sperren_ein',
+                   // Strompreis-Anzeige (V2b, seit 0.9.32)
+                   'strompreis_ein') as $ak_haken) {
         $ak_cfg[$ak_haken] = isset($_POST[$ak_haken]) ? 1 : 0;
     }
 
@@ -295,16 +308,26 @@ if ($ak_post && isset($_POST['speichern'])) {
      * und eine Solarbank 3 ist entweder zu klein oder zu gross. Ein leeres
      * Feld heisst "es gilt der allgemeine Wert" - nicht "0". */
     $ak_gr = array();
+    /* K3/K14 (seit 0.9.32): nur Text (ein Feld statt Text wird beanstandet, nie zu "Array"), je Wert die
+     * Grenzen der Hauslast aus ak_zahlgrenzen() (0..5000, bis 0.9.31 bis 9999), und min nicht ueber max gegen
+     * den GELTENDEN Wert - ein leeres Feld gilt mit der allgemeinen Grenze (min 3000 bei allgemein max 1600
+     * sperrte bis 0.9.31 jede Hauslast der Anlage). Dieselbe Regel beim Zurueckspielen und im Dienst. */
+    $ak_zg = ak_zahlgrenzen();
     foreach (ak_anlagen() as $ak_nr => $ak_an) {
-        $ak_e1 = isset($_POST['gmin_' . $ak_nr]) ? trim((string) $_POST['gmin_' . $ak_nr]) : '';
-        $ak_e2 = isset($_POST['gmax_' . $ak_nr]) ? trim((string) $_POST['gmax_' . $ak_nr]) : '';
+        $ak_r1 = isset($_POST['gmin_' . $ak_nr]) ? $_POST['gmin_' . $ak_nr] : '';
+        $ak_r2 = isset($_POST['gmax_' . $ak_nr]) ? $_POST['gmax_' . $ak_nr] : '';
+        $ak_e1 = is_string($ak_r1) ? trim($ak_r1) : '?';
+        $ak_e2 = is_string($ak_r2) ? trim($ak_r2) : '?';
         foreach (array('gmin_' => $ak_e1, 'gmax_' => $ak_e2) as $ak_gname => $ak_v) {
-            if ($ak_v !== '' && !preg_match('/^[0-9]{1,4}\z/', $ak_v)) {
+            if ($ak_v !== '' && (!preg_match('/^[0-9]{1,4}\z/', $ak_v) || (int) $ak_v < $ak_zg['hauslast_min'][0]
+                                 || (int) $ak_v > $ak_zg['hauslast_max'][1])) {
                 $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_GRENZE_ANLAGE'), $ak_nr);
                 $ak_beanstandet[] = $ak_gname . $ak_nr;
             }
         }
-        if ($ak_e1 !== '' && $ak_e2 !== '' && (int) $ak_e1 > (int) $ak_e2) {
+        $ak_glo = $ak_e1 !== '' ? (int) $ak_e1 : (int) $ak_cfg['hauslast_min'];
+        $ak_ghi = $ak_e2 !== '' ? (int) $ak_e2 : (int) $ak_cfg['hauslast_max'];
+        if (($ak_e1 !== '' || $ak_e2 !== '') && $ak_glo > $ak_ghi) {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_GRENZE_TAUSCH'), $ak_nr);
             $ak_beanstandet[] = 'gmin_' . $ak_nr;
             $ak_beanstandet[] = 'gmax_' . $ak_nr;
@@ -383,8 +406,12 @@ if ($ak_post && isset($_POST['speichern'])) {
  * ruehrt ausschliesslich die MQTT-Werte an. */
 if ($ak_post && isset($_POST['save_mqtt'])) {
     $ak_cfg = ak_config(true);
+    // K22 (seit 0.9.32): der Stand VOR dem Speichern - fuer das Abraeumen bei "MQTT aus" oder Praefixwechsel.
+    $ak_mqtt_vorher = array((int) !empty($ak_cfg['mqtt_ein']), (string) $ak_cfg['mqtt_topic']);
     $ak_cfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     $ak_cfg['mqtt_nur_aenderung'] = isset($_POST['mqtt_nur_aenderung']) ? 1 : 0;
+    // V1 (seit 0.9.32): Befehle ueber die Befehlsbruecke annehmen.
+    $ak_cfg['befehle_mqtt_ein'] = isset($_POST['befehle_mqtt_ein']) ? 1 : 0;
     // Ungueltig wird abgewiesen, nicht still gesaeubert (Befund MQTT M6);
     // dieselbe Pruefung gilt beim Zurueckspielen und im Dienst.
     $ak_topic = isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic'])
@@ -399,11 +426,28 @@ if ($ak_post && isset($_POST['save_mqtt'])) {
     if (!$ak_fehler) {
         if (ak_config_speichern($ak_cfg)) {
             $ak_meldungen[] = ak_t('EINST.GESPEICHERT');
+            list($ak_mn, $ak_mf) = ak_nach_mqtt_speichern($ak_mqtt_vorher, $ak_cfg);
+            $ak_meldungen = array_merge($ak_meldungen, $ak_mn);
+            $ak_fehler = array_merge($ak_fehler, $ak_mf);
         } else {
             $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_SPEICHERN'), $ak_p['config']);
         }
     }
     $ak_tab = 'tab-mqtt';
+}
+
+/* ---------------- HTTP-Lesezweig fuer Loxone (seit 0.9.32, E-E21) ----------------
+ * Eigenes Formular im Reiter Einbindung, Abschnitt "Bestehende Anlagen". Der Handler laedt den Bestand und
+ * ruehrt nur endpunkt_ein an. */
+if ($ak_post && isset($_POST['save_endpunkt'])) {
+    $ak_cfg = ak_config(true);
+    $ak_cfg['endpunkt_ein'] = isset($_POST['endpunkt_ein']) ? 1 : 0;
+    if (ak_config_speichern($ak_cfg)) {
+        $ak_meldungen[] = ak_t('EINST.GESPEICHERT');
+    } else {
+        $ak_fehler[] = sprintf(ak_t('EINST.FEHLER_SPEICHERN'), $ak_p['config']);
+    }
+    $ak_tab = 'tab-loxone';
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
@@ -431,10 +475,21 @@ if ($ak_post && isset($_POST['token_neu'])) {
 }
 
 /* ---------------- Log leeren ---------------- */
+/* K4 (seit 0.9.32, Regeln/04 :289): nur mit dem Bestaetigungshaekchen, sonst geschieht nichts; der
+ * Rueckgabewert wird geprueft (bis 0.9.31 hiess es immer "geleert"), und ankersolix_start.log wird mitgeleert. */
 if ($ak_post && isset($_POST['log_leeren'])) {
-    @mkdir(dirname($ak_p['log']), 0775, true);
-    @file_put_contents($ak_p['log'], '[' . date('Y-m-d H:i:s') . '] ' . ak_t('LOG.GELEERT') . "\n");
-    $ak_meldungen[] = ak_t('LOG.GELEERT');
+    if (empty($_POST['log_bestaetigt'])) {
+        $ak_fehler[] = ak_t('LOG.NICHT_BESTAETIGT');
+    } else {
+        @mkdir(dirname($ak_p['log']), 0775, true);
+        $ak_lok = @file_put_contents($ak_p['log'], '[' . date('Y-m-d H:i:s') . '] ' . ak_t('LOG.GELEERT') . "\n") !== false;
+        $ak_sok = !is_file($ak_p['startlog']) || @file_put_contents($ak_p['startlog'], '') !== false;
+        if ($ak_lok && $ak_sok) {
+            $ak_meldungen[] = ak_t('LOG.GELEERT_BEIDE');
+        } else {
+            $ak_fehler[] = ak_t('LOG.NICHT_GELEERT');
+        }
+    }
     $ak_tab = 'tab-log';
 }
 
@@ -479,6 +534,8 @@ $ak_mqtt = ak_mqtt_zustand();
 $ak_host = ak_host();
 $ak_basis = 'http://' . $ak_host . '/plugins/' . $ak_p['plugin'] . '/index.php';
 list($ak_wn, $ak_wz) = ak_waechter_stand();
+// Seit 0.9.32 (E-E8): EINE Namenstabelle fuer Reiter MQTT, Einbindung und Bausteinliste.
+$ak_nt = ak_mqtt_namenstabelle($ak_cfg);
 
 /* Welcher Verlaufstag wird gezeigt? Bis 0.9.6 gab es keine Auswahl - der
  * Dienst hielt bis zu 90 Tage vor, sichtbar war immer nur heute. */
@@ -528,6 +585,9 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
     } elseif ((int) $_FILES['ak_sicherung']['size'] > 262144) {
         $ak_fehler[] = ak_t('EINST.SICH_ZU_GROSS');
     } else {
+        // K22/V1 (seit 0.9.32): der MQTT-Stand vor dem Zurueckspielen - wie beim Speichern im Reiter MQTT.
+        $ak_vor = ak_config(false);
+        $ak_mqtt_vorher = array((int) !empty($ak_vor['mqtt_ein']), (string) $ak_vor['mqtt_topic']);
         $ak_sl = ak_sicherung_lesen((string) @file_get_contents($_FILES['ak_sicherung']['tmp_name']));
         list($ak_neu, $ak_mangel, $ak_n, $ak_zneu) = $ak_sl;
         // Energie-1 C1: Hinweise (etwa "Sicherung von vor der Schreiber-Wache").
@@ -548,6 +608,9 @@ if ($ak_post && isset($_POST['ak_zurueck'])) {
             foreach ($ak_shinweise as $ak_sh) {
                 $ak_meldungen[] = $ak_sh;
             }
+            list($ak_mn, $ak_mf) = ak_nach_mqtt_speichern($ak_mqtt_vorher, $ak_neu);
+            $ak_meldungen = array_merge($ak_meldungen, $ak_mn);
+            $ak_fehler = array_merge($ak_fehler, $ak_mf);
         } else {
             $ak_fehler[] = ak_t('EINST.SICH_SCHREIBFEHLER');
         }
@@ -572,7 +635,7 @@ if ($ak_post_roh && ak_einmal_schreiben($ak_meldungen, $ak_fehler, $ak_testausga
 }
 
 if ($ak_rahmen) {
-    LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/', 'help.html');
+    LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/plugins/ankersolix/start', 'help.html');
 }
 
 ?>
@@ -660,6 +723,11 @@ if ($ak_rahmen) {
    Feld nach der Umleitung rot umrandet. */
 .sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
     border: 2px solid #c62828 !important; background-color: #fff5f5; }
+/* Ergaenzung (Gruppe 26, 0.9.32): Kopierknopf der Namenstabelle und der zugeklappte Abschnitt
+   "Bestehende Anlagen: HTTP-Endpunkt". */
+.sm-wrap .sm-btn.sm-kopie { min-width: 0 !important; padding: 2px 8px !important; font-size: 0.8em; margin-left: 6px !important; }
+.sm-alt { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; margin: 14px 0; background: #fbfbfb; }
+.sm-alt summary { cursor: pointer; }
 /* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
@@ -734,7 +802,7 @@ if ($ak_rahmen) {
 <div class="sm-feld" style="margin:6px 0 0;">
   <label for="tagwahl<?= ak_e($ak_nr) ?>"><?= ak_e(ak_t('ALLG.TAG_WAEHLEN')) ?></label>
   <select data-role="none" id="tagwahl<?= ak_e($ak_nr) ?>"
-          onchange="location.href='index.php?form=settings&amp;tag='+this.value">
+          onchange="location.href='index.php?form=<?= ak_e(substr($ak_tab, 4)) ?>&amp;tag='+this.value">
 <?php foreach ($ak_tage as $ak_td) { ?>
     <option value="<?= ak_e($ak_td) ?>"<?= $ak_td === $ak_vtag ? ' selected' : '' ?>><?= ak_e(
       substr($ak_td, 6, 2) . '.' . substr($ak_td, 4, 2) . '.' . substr($ak_td, 0, 4)) ?></option>
@@ -1021,9 +1089,19 @@ if ($ak_rahmen) {
 <?php /* MQTT stand bis 0.9.4 hier. Es wohnt jetzt vollstaendig im Reiter
          MQTT - eine Sache, eine Stelle. */ ?>
 
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span>
+<?php /* Seit 0.9.32 (V2b, E-E10/E-E11): Abnehmer haus/strompreis - nur Anzeige neben der Betriebsart
+         "Zeitfenster". Die Legende steht seit 0.9.32 nur noch oben im Reiter (N13). */ ?>
+<h2><?= ak_e(ak_t('PREIS.H_TITEL')) ?></h2>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="strompreis_ein" value="1" <?= ak_eingabe_an('settings', 'strompreis_ein', !empty($ak_cfg['strompreis_ein'])) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('PREIS.L_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= ak_t('PREIS.H_EIN') ?></div>
 </div>
+<?php list($ak_ps, $ak_pt) = ak_preis_lage($ak_cfg); ?>
+<div class="<?= $ak_ps === 1 ? 'sm-hinweis' : 'sm-warnung' ?>"><?= ak_t('PREIS.ZEITFENSTER') ?><br><?= $ak_pt ?></div>
+
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
 </div>
@@ -1087,6 +1165,8 @@ if ($ak_rahmen) {
 <div class="sm-seite<?= $ak_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
 
 <h2><?= ak_e(ak_t('EINST.H_MQTT')) ?></h2>
+<?php /* Eine Legende oben im Reiter (Regeln/04, N13): hier gibt es nur den Speichern-Knopf. */ ?>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span></div>
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
 <input data-role="none" type="hidden" name="save_mqtt" value="1">
@@ -1096,6 +1176,9 @@ if ($ak_rahmen) {
     <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= ak_eingabe_an('mqtt', 'mqtt_ein', !empty($ak_cfg['mqtt_ein'])) ? 'checked' : '' ?>>
     <?= ak_e(ak_t('EINST.L_MQTT_EIN')) ?>
   </label>
+<?php if (empty($ak_cfg['mqtt_ein'])) { ?>
+  <div class="sm-hilfe" style="color:#777;"><?= ak_t('MQTT.AUS_SATZ') ?></div>
+<?php } ?>
 </div>
 <div class="sm-feld">
   <label for="mqtt_topic"><?= ak_e(ak_t('EINST.L_MQTT_TOPIC')) ?></label>
@@ -1109,7 +1192,15 @@ if ($ak_rahmen) {
   </label>
   <div class="sm-hilfe"><?= ak_t('EINST.H_MQTT_AENDERUNG') ?></div>
 </div>
-<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span></div>
+<?php /* Seit 0.9.32 (V1, E-E2/E-E3): Befehle aus Loxone ueber die Befehlsbruecke. */ ?>
+<h3><?= ak_e(ak_t('BEFEHL.H_BEFEHLE')) ?></h3>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1" <?= ak_eingabe_an('mqtt', 'befehle_mqtt_ein', !empty($ak_cfg['befehle_mqtt_ein'])) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('BEFEHL.L_ANNEHMEN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= ak_t('BEFEHL.H_ANNEHMEN') ?></div>
+</div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
 </div>
@@ -1136,21 +1227,42 @@ if ($ak_rahmen) {
 
 <h2><?= ak_e(ak_t('MQTT.H_ABO')) ?></h2>
 <div class="sm-warnung"><?= ak_abo_text() ?></div>
+<?php if ((int) $ak_mqtt['fassung'] === 1 || (int) $ak_mqtt['fassung'] <= 0) { ?>
 <div class="sm-step">
 <?= ak_t('MQTT.ABO_SCHRITTE') ?>
 <p><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic']) ?>/#</span></p>
 </div>
+<?php } ?>
+<?php if ((int) $ak_mqtt['fassung'] !== 1) {
+    /* V2-Hakenliste (Entwurf 2.6, E-E8): 25 Haken fuer das Musterprojekt, Anlage 1; status/ok mit
+       "Noncached". Nur bei Gateway V2 oder unbekannter Fassung. */ ?>
+<h3><?= ak_e(ak_t('MQTT.H_V2')) ?></h3>
+<p class="sm-hilfe"><?= ak_t('MQTT.V2_SATZ') ?></p>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('MQTT.T_NAME')) ?></th><th><?= ak_e(ak_t('MQTT.T_THEMA')) ?></th><th><?= ak_e(ak_t('MQTT.T_NONCACHED')) ?></th><th><?= ak_e(ak_t('MQTT.T_MP')) ?></th></tr>
+<?php foreach ($ak_nt as $ak_ne) { if (!$ak_ne['haken']) { continue; } ?>
+<tr><td><span class="sm-mono"><?= ak_e($ak_ne['name']) ?></span></td>
+    <td><span class="sm-mono"><?= ak_e($ak_ne['voll']) ?></span></td>
+    <td><?= $ak_ne['noncached'] ? '<b>' . ak_e(ak_t('ALLG.JA')) . '</b>' : ak_e(ak_t('ALLG.NEIN')) ?></td>
+    <td><?= ak_e($ak_ne['mp']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= ak_t('MQTT.V2_NICHT') ?></p>
+<?php } ?>
 
 <h2><?= ak_e(ak_t('MQTT.H_THEMEN')) ?></h2>
 <p class="sm-hilfe"><?= ak_t('MQTT.THEMEN_ERKLAERUNG') ?></p>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th><?= ak_e(ak_t('MQTT.T_THEMA')) ?></th><th><?= ak_e(ak_t('MQTT.T_BEDEUTUNG')) ?></th><th><?= ak_e(ak_t('MQTT.T_RETAINED')) ?></th></tr>
-<?php $ak_retained = ak_retain_themen(); ?>
+<tr><th><?= ak_e(ak_t('MQTT.T_THEMA')) ?></th><th><?= ak_e(ak_t('MQTT.T_BEDEUTUNG')) ?></th><th><?= ak_e(ak_t('MQTT.T_RETAINED')) ?></th><th><?= ak_e(ak_t('MQTT.T_OHNE')) ?></th></tr>
+<?php $ak_retained = ak_retain_themen(); $ak_textth = ak_text_themen(); ?>
 <?php foreach (ak_mqtt_themen() as $ak_thema => $ak_schluessel) { ?>
-<tr><td><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic'] . '/' . $ak_thema) ?></span></td>
+<tr><td><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic'] . '/' . $ak_thema) ?></span><?= in_array($ak_thema, array('ok', 'ts', 'fehler'), true) ? ' <i>(' . ak_e(ak_t('MQTT.ALT')) . ')</i>' : '' ?></td>
     <td><?= ak_t($ak_schluessel) ?></td>
-    <td><?= $ak_retained === null ? ak_e(ak_t('MQTT.RETAINED_UNBEKANNT')) : (in_array($ak_thema, $ak_retained, true) ? ak_e(ak_t('ALLG.JA')) : ak_e(ak_t('ALLG.NEIN'))) ?></td></tr>
+    <td><?= $ak_retained === null ? ak_e(ak_t('MQTT.RETAINED_UNBEKANNT')) : (in_array($ak_thema, $ak_retained, true) ? ak_e(ak_t('ALLG.JA')) : ak_e(ak_t('ALLG.NEIN'))) ?></td>
+    <td><span class="sm-mono"><?= $ak_textth === null ? '?' : (in_array($ak_thema, $ak_textth, true) ? '-' : '-1') ?></span></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -1161,18 +1273,263 @@ if ($ak_rahmen) {
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
 <div class="sm-seite<?= $ak_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?= ak_e(ak_t('LOX.H_TITEL')) ?></h2>
+<?php /* Eine Legende oben im Reiter (Regeln/04, N13): gruen die Kopierknoepfe, grau die Vorlagen,
+         orange Token und Speichern. */ ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= ak_t('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= ak_t('LEGENDE.TECHNIK') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span>
+</div>
 <p><?= ak_t('LOX.EINLEITUNG') ?></p>
 
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S1_TITEL')) ?></b><br>
 <?= ak_t('LOX.S1_TEXT') ?>
 </div>
 
-<div class="sm-step"><b><?= ak_e(ak_t('LOX.S2_TITEL')) ?></b><br>
-<?= ak_t('LOX.S2_TEXT') ?>
-<p><span class="sm-mono"><?= ak_e($ak_cfg['mqtt_topic']) ?>/#</span></p>
+<?php /* Seit 0.9.32 (Entscheidung 2, E-E8): Werte ueber MQTT - Namenstabelle mit Gateway-Namen. */ ?>
+<div class="sm-step"><b><?= ak_e(ak_t('LOX.W_TITEL')) ?></b><br>
+<?= ak_t('LOX.W_TEXT') ?>
 <div class="sm-warnung"><?= ak_abo_text() ?></div>
+<ul class="sm-hilfe">
+<li><?= ak_t('LOX.W_RECHTE') ?></li>
+<li><?= ak_t('LOX.W_RECONNECT') ?></li>
+<li><?= ak_t('LOX.W_SN') ?></li>
+</ul>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('MQTT.T_NAME')) ?></th><th><?= ak_e(ak_t('MQTT.T_BAUFORM')) ?></th><th><?= ak_e(ak_t('MQTT.T_BEDEUTUNG')) ?></th>
+    <th><?= ak_e(ak_t('MQTT.T_WERTE')) ?></th><th><?= ak_e(ak_t('MQTT.T_OHNE')) ?></th><th><?= ak_e(ak_t('MQTT.T_RETAINED')) ?></th>
+    <th><?= ak_e(ak_t('MQTT.T_HAKEN')) ?></th><th><?= ak_e(ak_t('MQTT.T_MP')) ?></th></tr>
+<?php foreach ($ak_nt as $ak_ne) { ?>
+<tr><td><span class="sm-mono"><?= ak_e($ak_ne['name']) ?></span>
+      <button data-role="none" type="button" class="sm-btn sm-b-lesen sm-kopie" data-kopie="<?= ak_e($ak_ne['name']) ?>"><?= ak_e(ak_t('LOX.K_KOPIEREN')) ?></button>
+      <?= $ak_ne['alt'] ? '<br><i>' . ak_e(ak_t('MQTT.ALT')) . '</i>' : '' ?></td>
+    <td><?= ak_e(ak_t($ak_ne['text'] ? 'MQTT.B_TEXTEINGANG' : 'MQTT.B_EINGANG')) ?></td>
+    <td><?= ak_t($ak_ne['bez']) ?></td>
+    <td><?= ak_e($ak_ne['bereich']) ?></td>
+    <td><span class="sm-mono"><?= ak_e($ak_ne['fehlwert']) ?></span></td>
+    <td><?= $ak_ne['retain'] ? ak_e(ak_t('ALLG.JA')) : ak_e(ak_t('ALLG.NEIN')) ?></td>
+    <td><?= $ak_ne['haken'] ? ak_e(ak_t('ALLG.JA')) . ($ak_ne['noncached'] ? ', Noncached' : '') : '&ndash;' ?></td>
+    <td><?= $ak_ne['mp'] !== '' ? ak_e($ak_ne['mp']) : '&ndash;' ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= ak_t('LOX.W_EVCC') ?></p>
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('MQTT.T_NAME')) ?></th><th><?= ak_e(ak_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
+<?php foreach (ak_evcc_werte() as $ak_ev) { ?>
+<tr><td><span class="sm-mono"><?= ak_e($ak_ev[0]) ?></span>
+      <button data-role="none" type="button" class="sm-btn sm-b-lesen sm-kopie" data-kopie="<?= ak_e($ak_ev[0]) ?>"><?= ak_e(ak_t('LOX.K_KOPIEREN')) ?></button></td>
+    <td><?= ak_t($ak_ev[1]) ?></td></tr>
+<?php } ?>
+</table>
 </div>
 
+<?php /* Seit 0.9.32 (V1, E-E2): Befehle ueber die Befehlsbruecke - die Liste aus bb_liste(). */ ?>
+<div class="sm-step"><b><?= ak_e(ak_t('LOX.B_TITEL')) ?></b><br>
+<?= ak_t('LOX.B_TEXT') ?>
+<div class="sm-warnung"><?= ak_t('LOX.B_HAUSLAST_MODUS') ?></div>
+<?php list($ak_bl, $ak_blf) = ak_bruecke_liste(); ?>
+<?php if (!is_array($ak_bl)) { ?>
+<div class="sm-fehler"><?= ak_e($ak_blf) ?></div>
+<?php } else { ?>
+<p class="sm-hilfe"><?= sprintf(ak_t('LOX.B_AUSGANG'), ak_e(preg_replace('/:[0-9]+\z/', '', $ak_host)), (int) ak_udp_port()) ?></p>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('LOX.T_B_NAME')) ?></th><th><?= ak_e(ak_t('LOX.T_B_WERTE')) ?></th><th><?= ak_e(ak_t('LOX.T_B_LOXONE')) ?></th><th><?= ak_e(ak_t('LOX.T_B_SPERRE')) ?></th></tr>
+<?php foreach ($ak_bl['befehle'] as $ak_bb) {
+    $ak_lx = $ak_bb['loxone'];
+    $ak_zeilen = isset($ak_lx['je_wert']) ? array_values($ak_lx['je_wert'])
+        : array_values(array_filter(array($ak_lx['ein'], $ak_lx['aus']), 'strlen'));
+    $ak_werte = $ak_bb['art'] === 'auswahl' ? implode(', ', $ak_bb['werte'])
+        : (isset($ak_bb['min']) ? $ak_bb['min'] . ' … ' . $ak_bb['max'] : ($ak_bb['art'] === 'schalter' ? '1 / 0' : '1')); ?>
+<tr><td><span class="sm-mono"><?= ak_e($ak_bb['thema']) ?></span><br><?= ak_e(ak_t($ak_bb['kachel'])) ?></td>
+    <td><?= ak_e($ak_werte) ?></td>
+    <td><span class="sm-mono"><?= implode('<br>', array_map('ak_e', $ak_zeilen)) ?></span></td>
+    <td><?= (int) $ak_bb['sperre_s'] ?> s</td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= sprintf(ak_t('LOX.B_QUITTUNG'), ak_e($ak_bl['lebenszeichen'])) ?></p>
+<?php } ?>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <input data-role="none" type="hidden" name="vorlage" value="mqtt">
+    <input data-role="none" type="hidden" name="vorlage_nr" value="1">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= ak_e(ak_t('LOX.K_VORLAGE_MQTT')) ?></button>
+  </form>
+</div>
+<p class="sm-hilfe"><?= ak_t('LOX.B_VORLAGE') ?></p>
+</div>
+
+<div class="sm-step"><b><?= ak_e(ak_t('LOX.S8_TITEL')) ?></b><br>
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('ALLG.EIGENSCHAFT')) ?></th><th><?= ak_e(ak_t('ALLG.WERT')) ?></th></tr>
+<tr><td><?= ak_e(ak_t('LOX.T_TOKEN')) ?></td><td><span class="sm-mono"><?= ak_e($ak_token) ?></span></td></tr>
+</table>
+<?= ak_t('LOX.S8_TEXT') ?>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="token_neu" value="1"><?= ak_e(ak_t('LOX.K_TOKEN_NEU')) ?></button>
+  </form>
+</div>
+</div>
+
+
+<?php
+/**
+ * Die Baustein-Listen. Pflicht im Hausstandard.
+ *
+ * Zwei Seiten aus dem LoxBerry-Plugins Musterprojekt (Musterprojekt/baustein_listen.txt, Abschnitte "AnkerSolix"
+ * 51 und "AnkerSolix Steuerung" 48 Zeilen, wortgleich; seit 0.9.32 Gruppe 26, Entwurf Abschnitt 9): Virtuelle
+ * Eingaenge mit Gateway-Namen (ankersolix_status_ok ...), die Befehle am Ausgang "LoxBerry MQTT-Gateway"
+ * ("Anker: ..."), die Lebenszeichen-Validierung und der EVCC-Vorrang. Bis 0.9.31 standen hier Vorlagen-Eingaenge
+ * des HTTP-Endpunkts (ANKER_1_OK ...) und der Ausgang mit Aktionstoken.
+ *
+ * Je Tabellenzeile EIN Sprachschluessel BAUSTEIN.Z<seite>_<nn> = "Typ | Name | Parameter | Eingaenge" ohne
+ * Auszeichnung; jede Zelle wird maskiert ausgegeben. Die Gateway-Namen der Linie kommen aus ak_gateway_name()
+ * ueber die Namenstabelle (Anlage 1): beim Praefix "ankersolix" gleich den Namen des Musterprojekts, ein anderes
+ * Praefix aendert die Titel mit (ak_bs_name()). Die EVCC-Namen bleiben fest (Praefix des EVCC-Plugins ab Werk
+ * evcc2lox). Die Bausteinnamen-Probe des Reiters Test haelt die Befehlsnamen gegen die Brueckenvorlage.
+ */
+function ak_bausteinseiten()
+{
+    $z1 = array();
+    for ($i = 1; $i <= 51; $i++) {
+        $z1[$i] = ak_t(sprintf('BAUSTEIN.Z1_%02d', $i));
+    }
+    $z2 = array();
+    for ($i = 1; $i <= 48; $i++) {
+        $z2[$i] = ak_t(sprintf('BAUSTEIN.Z2_%02d', $i));
+    }
+    $einst = ak_t('REITER.EINSTELLUNGEN');
+    return array(
+        array('kopf' => 'AnkerSolix', 'titel' => ak_t('LOX.BL_WERTE'), 'bild' => 'einbindung_loxone_werte.png',
+              'schritte' => array(
+                  sprintf(ak_t('BAUSTEIN.S1_SCHRITT1'), ak_t('LOX.W_TITEL')),
+                  ak_t('BAUSTEIN.S1_SCHRITT2'),
+                  ak_t('BAUSTEIN.S1_SCHRITT3'),
+                  ak_t('BAUSTEIN.S1_SCHRITT4'),
+                  ak_t('BAUSTEIN.S1_SCHRITT5'),
+                  sprintf(ak_t('BAUSTEIN.S1_SCHRITT6'), $einst, ak_t('EINST.L_STEUERUNG_EIN'), ak_t('BEFEHL.L_ANNEHMEN'),
+                      ak_t('EINST.L_OHNE_PROGNOSE'))),
+              'hinweise' => array('H_STATUS', 'H_ODER', 'H_VERZ', 'H_LEBEN', 'H_LEER', 'H_TASTEN', 'H_EINMAL'),
+              'zeilen' => $z1),
+        array('kopf' => 'AnkerSolix Steuerung', 'titel' => ak_t('LOX.BL_STEUERUNG'),
+              'bild' => 'einbindung_loxone_steuerung.png',
+              'schritte' => array(
+                  ak_t('BAUSTEIN.S2_SCHRITT1'),
+                  ak_t('BAUSTEIN.B_S2'),
+                  ak_t('BAUSTEIN.B_S3'),
+                  ak_t('BAUSTEIN.S2_SCHRITT4'),
+                  sprintf(ak_t('BAUSTEIN.B_S5'), $einst, ak_t('EINST.L_STEUERUNG_EIN'), ak_t('EINST.L_RUECKFALL_MIN')),
+                  ak_t('BAUSTEIN.B_S6'),
+                  ak_t('BAUSTEIN.S2_SCHRITT7')),
+              'hinweise' => array('H_MODUS', 'H_SCHREIBBREMSE', 'H_GLEICH', 'H_RUECKFALL', 'H_EVCC', 'H_EINMAL',
+                                  'H_PROZENT'),
+              'zeilen' => $z2),
+    );
+}
+
+/** Ein Name der Baustein-Seiten fuer die Ausgabe: ankersolix_<thema> -> Gateway-Name beim eingestellten Praefix. */
+function ak_bs_name($s, array $karte)
+{
+    $s = (string) $s;
+    return isset($karte[$s]) ? $karte[$s] : $s;
+}
+
+$ak_bs_karte = array();
+foreach ($ak_nt as $ak_ne) {
+    if (strpos($ak_ne['thema'], 'geraet/') !== 0 && strpos($ak_ne['thema'], 'anlage') !== 0
+        || strpos($ak_ne['thema'], 'anlage1/') === 0) {
+        $ak_bs_karte[ak_gateway_name('ankersolix', $ak_ne['thema'])] = $ak_ne['name'];
+    }
+}
+?>
+
+<div class="sm-step"><b><?= ak_e(ak_t('LOX.S10_TITEL')) ?></b><br>
+<?= ak_t('LOX.S10_TEXT') ?>
+<?php foreach (ak_bausteinseiten() as $ak_bs) { ?>
+<h4><?= ak_e($ak_bs['kopf']) ?></h4>
+<p class="sm-hilfe"><b><?= ak_e($ak_bs['titel']) ?></b></p>
+<div class="sm-hinweis"><b><?= ak_e(ak_t('BAUSTEIN.SO_TITEL')) ?></b>
+<ol>
+<?php foreach ($ak_bs['schritte'] as $ak_bsch) { ?>
+<li><?= $ak_bsch ?></li>
+<?php } ?>
+</ol>
+</div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th>#</th><th><?= ak_e(ak_t('LOX.T_BAUSTEIN')) ?></th><th><?= ak_e(ak_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
+    <th><?= ak_e(ak_t('LOX.T_PARAMETER')) ?></th><th><?= ak_e(ak_t('LOX.T_EINGAENGE')) ?></th></tr>
+<?php foreach ($ak_bs['zeilen'] as $ak_bn => $ak_bz) {
+    $ak_bc = array_pad(explode(' | ', $ak_bz, 4), 4, ''); ?>
+<tr><td><?= (int) $ak_bn ?></td><td><?= ak_e($ak_bc[0]) ?></td>
+    <td><?= strpos($ak_bc[0], 'Virtu') === 0 && strpos($ak_bc[1], '_') !== false
+             ? '<span class="sm-mono">' . ak_e(ak_bs_name($ak_bc[1], $ak_bs_karte)) . '</span>' : ak_e($ak_bc[1]) ?></td>
+    <td><?= ak_e($ak_bc[2]) ?></td>
+    <td><?= ak_e($ak_bc[3]) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><b><?= ak_e(ak_t('BAUSTEIN.H_TITEL')) ?></b></p>
+<ul class="sm-hilfe">
+<?php foreach ($ak_bs['hinweise'] as $ak_bh) { ?>
+<li><?= ak_t('BAUSTEIN.' . $ak_bh) ?></li>
+<?php } ?>
+</ul>
+<figure class="sm-bild">
+<img src="<?= ak_e($ak_bs['bild']) ?>" alt="<?= ak_e(sprintf(ak_t('LOX.BILD_ALT'), $ak_bs['titel'])) ?>" loading="lazy">
+<figcaption><?= ak_e(sprintf(ak_t('LOX.BILD_UNTERSCHRIFT'), $ak_bs['kopf'])) ?></figcaption>
+</figure>
+<p class="sm-hilfe"><?= ak_t('LOX.MUSTERPROJEKT') ?></p>
+<?php } ?>
+</div>
+
+<div class="sm-step"><b><?= ak_e(ak_t('LOX.S11_TITEL')) ?></b><br>
+<?= ak_t('LOX.S11_TEXT') ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ak_e(ak_t('LOX.T_PRUEFUNG')) ?></th><th><?= ak_e(ak_t('LOX.T_ERWARTUNG')) ?></th></tr>
+<tr><td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'selftest'))) ?></span></td>
+    <td><span class="sm-mono">SELFTEST;OK=1;TOKEN=OK</span></td></tr>
+<tr><td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'status', 'anlage' => 1))) ?></span></td>
+    <td><?= !empty($ak_cfg['endpunkt_ein']) ? '<span class="sm-mono">ANKER;OK=1;SOC=...</span>'
+        : '<span class="sm-mono">ANKER;OK=0;GRUND=ENDPUNKT_AUS</span> (HTTP 403)' ?></td></tr>
+<tr><td><span class="sm-mono"><?= ak_e($ak_basis) ?>?aktion=status</span></td>
+    <td><span class="sm-mono">FEHLER;OK=0;GRUND=TOKEN</span> (HTTP 403)</td></tr>
+<tr><td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'quatsch'))) ?></span></td>
+    <td><span class="sm-mono">FEHLER;OK=0;GRUND=UNBEKANNTE_AKTION</span> (HTTP 400)</td></tr>
+</table>
+</div>
+</div>
+
+<?php /* Seit 0.9.32 (Entscheidung 2, E-E21, Entwurf 2.10/3.4): der HTTP-Weg fuer bestehende Anlagen - zugeklappt,
+         offen bei endpunkt_ein 1. Der Haken gilt nur dem Lesezweig (status, energie, geraet, anlagen, roh);
+         selftest und die Befehle mit Token haengen nicht daran. */ ?>
+<details class="sm-alt"<?= !empty($ak_cfg['endpunkt_ein']) ? ' open' : '' ?>>
+<summary><b><?= ak_e(ak_t('LOX.ALT_TITEL')) ?></b></summary>
+<div class="sm-hinweis"><?= ak_t('LOX.ALT_TEXT') ?></div>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
+<input data-role="none" type="hidden" name="save_endpunkt" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="endpunkt_ein" value="1" <?= !empty($ak_cfg['endpunkt_ein']) ? 'checked' : '' ?>>
+    <?= ak_e(ak_t('LOX.L_ENDPUNKT')) ?>
+  </label>
+  <div class="sm-hilfe"><?= ak_t('LOX.H_ENDPUNKT') ?></div>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ak_e(ak_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S3_TITEL')) ?></b><br>
 <?= ak_t('LOX.S3_TEXT') ?>
 <table class="sm-tbl">
@@ -1286,29 +1643,8 @@ if ($ak_rahmen) {
 <?= ak_t('LOX.S7_TEXT') ?>
 </div>
 
-<div class="sm-step"><b><?= ak_e(ak_t('LOX.S8_TITEL')) ?></b><br>
-<table class="sm-tbl">
-<tr><th><?= ak_e(ak_t('ALLG.EIGENSCHAFT')) ?></th><th><?= ak_e(ak_t('ALLG.WERT')) ?></th></tr>
-<tr><td><?= ak_e(ak_t('LOX.T_TOKEN')) ?></td><td><span class="sm-mono"><?= ak_e($ak_token) ?></span></td></tr>
-</table>
-<?= ak_t('LOX.S8_TEXT') ?>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION_TOKEN') ?></span>
-</div>
-<div class="sm-knopfreihe">
-  <form action="index.php" method="post">
-    <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
-    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="token_neu" value="1"><?= ak_e(ak_t('LOX.K_TOKEN_NEU')) ?></button>
-  </form>
-</div>
-</div>
-
 <div class="sm-step"><b><?= ak_e(ak_t('LOX.S9_TITEL')) ?></b><br>
 <?= ak_t('LOX.S9_TEXT') ?>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?= ak_t('LEGENDE.TECHNIK') ?></span>
-</div>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
@@ -1372,224 +1708,27 @@ if ($ak_rahmen) {
 <?php } ?>
 </div>
 
-<?php
-/**
- * Die Baustein-Listen. Pflicht im Hausstandard.
- *
- * Welle Bild 9 VOLL (0.9.31, Entscheidung des Hausherrn 11.10.2026: Vollausstattung, ein Laie
- * soll das Maximum leicht uebernehmen koennen): zwei Seiten aus dem LoxBerry-Plugins
- * Musterprojekt (Musterprojekt/baustein_listen.txt, Abschnitte "AnkerSolix" und "AnkerSolix
- * Steuerung"), dort in Loxone Config gebaut und mit leitungen_setzen.py verbunden - eine Zeile =
- * ein Baustein. Muster ist Anlage 1 (wie die Vorlagen-Knoepfe ohne Auswahl). Vorlagentitel und
- * Namen der Vorlagen-Eingaenge und -Befehle kommen aus derselben Quelle wie die Importdateien
- * (ak_vorlage_titel(), ak_vorlage_praefix(), ak_vo_titel(), VO.*). Bis 0.9.30 stand hier eine
- * eigene Liste mit 30 Zeilen (Funktion ak_bausteine) samt Regelkreis mit Impulsgeber-Trick.
- *
- * Je Seite: Ueberschrift, Kasten "So uebernehmen Sie diese Seite" (Schritte mit Knopf-,
- * Vorlagen- und Einstellungsnamen der Linie), Tabelle, Hinweise, Bild, Link. Je Zeile: Typ,
- * Name, Parameter, Eingaenge verbinden mit, Art ('vi' Eingang einer Vorlage, 'vq' Befehl der
- * Vorlage der Steuerbefehle, '' sonst - die Art liest ak_bausteinnamen_probe() im Reiter Test).
- * Zellen: 'BAUSTEIN.X' geht durch ak_t(), sonst Klartext (Eingaenge mit Woertern kommen schon
- * fertig aus sprintf(ak_t(...))); ausgegeben wird jede Zelle mit ak_e(), '' als Strich.
- */
-function ak_bl_text($x)
-{
-    return strpos((string) $x, 'BAUSTEIN.') === 0 ? ak_t($x) : (string) $x;
-}
-
-/** Titel eines Befehls der Vorlage der Steuerbefehle - derselbe Text wie in ak_vo_vorlage(). */
-function ak_bl_vo($k)
-{
-    return ak_t('VO.' . $k);
-}
-
-function ak_bl_seiten()
-{
-    $vi  = sprintf(ak_t('BAUSTEIN.T_VIBEF'), ak_vorlage_titel('status', 1));
-    $vie = sprintf(ak_t('BAUSTEIN.T_VIBEF'), ak_vorlage_titel('energie', 1));
-    $vq  = sprintf(ak_t('BAUSTEIN.T_VABEF'), ak_vo_titel(1));
-    $s = ak_vorlage_praefix('status', 1) . '_';
-    $e = ak_vorlage_praefix('energie', 1) . '_';
-    $einst = ak_t('REITER.EINSTELLUNGEN');
-    return array(
-        array(
-        'titel'    => ak_t('LOX.BL_WERTE'),
-        'seite'    => 'AnkerSolix',
-        'bild'     => 'einbindung_loxone_werte.png',
-        'schritte' => array(
-            sprintf(ak_t('BAUSTEIN.A_S1'), ak_t('LOX.K_VORLAGE'), ak_t('LOX.K_VORLAGE_ENERGIE'),
-                ak_t('LOX.K_VORLAGE_AUSGANG')),
-            sprintf(ak_t('BAUSTEIN.A_S2'), ak_vorlage_titel('status', 1), ak_vorlage_titel('energie', 1),
-                ak_vo_titel(1)),
-            ak_t('BAUSTEIN.A_S3'),
-            ak_t('BAUSTEIN.A_S4'),
-            ak_t('BAUSTEIN.A_S5'),
-            sprintf(ak_t('BAUSTEIN.A_S6'), $einst, ak_t('EINST.L_STEUERUNG_EIN'), ak_t('EINST.L_OHNE_PROGNOSE')),
-        ),
-        'hinweise' => array('H_STATUS', 'H_ODER', 'H_VERZ', 'H_LEER', 'H_TASTEN', 'H_EINMAL'),
-        'zeilen'   => array(
-            1  => array($vi, $s . 'OK', 'BAUSTEIN.A01_P', '', 'vi'),
-            2  => array($vi, $s . 'ALTER', 'BAUSTEIN.A02_P', '', 'vi'),
-            3  => array($vi, $s . 'SOC', 'BAUSTEIN.A03_P', '', 'vi'),
-            4  => array($vi, $s . 'BATP', 'BAUSTEIN.A04_P', '', 'vi'),
-            5  => array($vi, $s . 'PV', 'BAUSTEIN.A05_P', '', 'vi'),
-            6  => array($vi, $s . 'HAUS', 'BAUSTEIN.A06_P', '', 'vi'),
-            7  => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A07_N', 'BAUSTEIN.A07_P', 'V1 = #3, V2 = #4, V3 = #5, V4 = #6', ''),
-            8  => array('BAUSTEIN.T_SWS', 'BAUSTEIN.A08_N', 'BAUSTEIN.A08_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 3), ''),
-            9  => array('BAUSTEIN.T_BENACHR', 'BAUSTEIN.A09_N', 'BAUSTEIN.P_FREI', sprintf(ak_t('BAUSTEIN.E_EIN'), 8), ''),
-            10 => array('BAUSTEIN.T_SWS', 'BAUSTEIN.A10_N', 'BAUSTEIN.A10_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 2), ''),
-            11 => array('BAUSTEIN.T_NICHT', 'BAUSTEIN.A11_N', '', 'I = #1', ''),
-            12 => array('BAUSTEIN.T_ODER', 'BAUSTEIN.A12_N', '', 'I1 = #10, I2 = #11', ''),
-            13 => array('BAUSTEIN.T_EVZ', 'BAUSTEIN.A13_N', 'BAUSTEIN.A13_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 12), ''),
-            14 => array('BAUSTEIN.T_BENACHR', 'BAUSTEIN.A14_N', 'BAUSTEIN.P_FREI', sprintf(ak_t('BAUSTEIN.E_EIN'), 13), ''),
-            15 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.A15_N', 'BAUSTEIN.P_APP', '', ''),
-            16 => array($vq, ak_bl_vo('EINSP_EIN'), 'BAUSTEIN.A16_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 15), 'vq'),
-            17 => array($vi, $s . 'NETZBEZUG', 'BAUSTEIN.A17_P', '', 'vi'),
-            18 => array($vi, $s . 'NETZEINSP', 'BAUSTEIN.A18_P', '', 'vi'),
-            19 => array($vi, $s . 'SOLL', 'BAUSTEIN.A19_P', '', 'vi'),
-            20 => array($vi, $s . 'MODUS', 'BAUSTEIN.A20_P', '', 'vi'),
-            21 => array($vi, $s . 'RESERVE', 'BAUSTEIN.A21_P', '', 'vi'),
-            22 => array($vi, $s . 'EINSPEISUNG', 'BAUSTEIN.A22_P', '', 'vi'),
-            23 => array($vi, $s . 'GRENZE', 'BAUSTEIN.A23_P', '', 'vi'),
-            24 => array($vi, $s . 'PROGNOSE', 'BAUSTEIN.A24_P', '', 'vi'),
-            25 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A25_N', 'BAUSTEIN.A25_P', 'V1 = #17, V2 = #18, V3 = #24', ''),
-            26 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A26_N', 'BAUSTEIN.A26_P', 'V1 = #20, V2 = #19', ''),
-            27 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A27_N', 'BAUSTEIN.A27_P', 'V1 = #22, V2 = #23, V3 = #21', ''),
-            28 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.A28_N', 'BAUSTEIN.A28_P', '', ''),
-            29 => array($vq, ak_bl_vo('EINSP_AUS'), 'BAUSTEIN.A29_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 28), 'vq'),
-            30 => array($vie, $e . 'OK', 'BAUSTEIN.A30_P', '', 'vi'),
-            31 => array($vie, $e . 'PV', 'BAUSTEIN.A31_P', '', 'vi'),
-            32 => array($vie, $e . 'BATLD', 'BAUSTEIN.A32_P', '', 'vi'),
-            33 => array($vie, $e . 'BATENTL', 'BAUSTEIN.A33_P', '', 'vi'),
-            34 => array($vie, $e . 'HAUS', 'BAUSTEIN.A34_P', '', 'vi'),
-            35 => array($vie, $e . 'NETZBEZUG', 'BAUSTEIN.A35_P', '', 'vi'),
-            36 => array($vie, $e . 'NETZEINSP', 'BAUSTEIN.A36_P', '', 'vi'),
-            37 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A37_N', 'BAUSTEIN.A37_P',
-                     'V1 = #31, V2 = #32, V3 = #33, V4 = #34, V5 = #35, V6 = #36, V7 = #30', ''),
-            38 => array($vie, $e . 'MPV', 'BAUSTEIN.A38_P', '', 'vi'),
-            39 => array($vie, $e . 'MHAUS', 'BAUSTEIN.A39_P', '', 'vi'),
-            40 => array($vie, $e . 'JPV', 'BAUSTEIN.A40_P', '', 'vi'),
-            41 => array($vie, $e . 'JHAUS', 'BAUSTEIN.A41_P', '', 'vi'),
-            42 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.A42_N', 'BAUSTEIN.A42_P',
-                     'V1 = #38, V2 = #39, V3 = #40, V4 = #41, V5 = #30', ''),
-            43 => array('BAUSTEIN.T_FORMEL', 'BAUSTEIN.A43_N', 'BAUSTEIN.A43_P', 'I1 = #4', ''),
-            44 => array('BAUSTEIN.T_ZAEHLER_SP', 'BAUSTEIN.A44_N', 'BAUSTEIN.A44_P', 'Pf = #43, Slvl = #3', ''),
-        ),
-        ),
-        array(
-        'titel'    => ak_t('LOX.BL_STEUERUNG'),
-        'seite'    => 'AnkerSolix Steuerung',
-        'bild'     => 'einbindung_loxone_steuerung.png',
-        'schritte' => array(
-            sprintf(ak_t('BAUSTEIN.B_S1'), ak_vorlage_titel('status', 1), ak_vo_titel(1)),
-            ak_t('BAUSTEIN.B_S2'),
-            ak_t('BAUSTEIN.B_S3'),
-            ak_t('BAUSTEIN.B_S4'),
-            sprintf(ak_t('BAUSTEIN.B_S5'), $einst, ak_t('EINST.L_STEUERUNG_EIN'), ak_t('EINST.L_RUECKFALL_MIN')),
-            ak_t('BAUSTEIN.B_S6'),
-        ),
-        'hinweise' => array('H_SCHREIBBREMSE', 'H_GLEICH', 'H_RUECKFALL', 'H_EINMAL', 'H_PROZENT'),
-        'zeilen'   => array(
-            1  => array($vi, $s . 'OK', 'BAUSTEIN.B01_P', '', 'vi'),
-            2  => array($vi, $s . 'SOC', 'BAUSTEIN.B02_P', '', 'vi'),
-            3  => array($vi, $s . 'SOLL', 'BAUSTEIN.B03_P', '', 'vi'),
-            4  => array('BAUSTEIN.T_VE', 'BAUSTEIN.B04_N', 'BAUSTEIN.B04_P', '', ''),
-            5  => array('BAUSTEIN.T_VE_SCHALTER', 'BAUSTEIN.B05_N', 'BAUSTEIN.B05_P', '', ''),
-            6  => array('BAUSTEIN.T_SWS', 'BAUSTEIN.B06_N', 'BAUSTEIN.B06_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 2), ''),
-            7  => array('BAUSTEIN.T_UND', 'BAUSTEIN.B07_N', '', 'I1 = #5, I2 = #6', ''),
-            8  => array('BAUSTEIN.T_UND', 'BAUSTEIN.B08_N', 'BAUSTEIN.B08_P', 'I1 = #7, I2 = #1', ''),
-            9  => array('BAUSTEIN.T_FORMEL', 'BAUSTEIN.B09_N', 'BAUSTEIN.B09_P', 'I1 = #3, I2 = #4', ''),
-            10 => array('BAUSTEIN.T_FLANKE', 'BAUSTEIN.B10_N', 'BAUSTEIN.B10_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 8), ''),
-            11 => array($vq, ak_bl_vo('MANUELL'), 'BAUSTEIN.B11_P', sprintf(ak_t('BAUSTEIN.E_EIN_AUSGANG'), 'On', 10), 'vq'),
-            12 => array('BAUSTEIN.T_EVZ', 'BAUSTEIN.B12_N', 'BAUSTEIN.B12_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 8), ''),
-            13 => array('BAUSTEIN.T_IMPULS', 'BAUSTEIN.B13_N', 'BAUSTEIN.B13_P', '', ''),
-            14 => array('BAUSTEIN.T_UND', 'BAUSTEIN.B14_N', '', sprintf(ak_t('BAUSTEIN.E_I1A_I2'), 'Q', 13, 12), ''),
-            15 => array('BAUSTEIN.T_ANALOGSP', 'BAUSTEIN.B15_N', 'BAUSTEIN.B15_P', 'V = #9, Set = #14', ''),
-            16 => array($vq, ak_bl_vo('HAUSLAST'), 'BAUSTEIN.B16_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 15), 'vq'),
-            17 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.B17_N', 'BAUSTEIN.B17_P', '', ''),
-            18 => array('BAUSTEIN.T_ODER', 'BAUSTEIN.B18_N', 'BAUSTEIN.B18_P', sprintf(ak_t('BAUSTEIN.E_I1A_I2'), 'Off', 10, 17), ''),
-            19 => array($vq, ak_bl_vo('EIGEN'), '', sprintf(ak_t('BAUSTEIN.E_EIN'), 18), 'vq'),
-            20 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.B20_N', 'BAUSTEIN.B20_P', '', ''),
-            21 => array($vq, ak_bl_vo('SMART'), '', sprintf(ak_t('BAUSTEIN.E_EIN'), 20), 'vq'),
-            22 => array('BAUSTEIN.T_VE_REGLER', 'BAUSTEIN.B22_N', 'BAUSTEIN.B22_P', '', ''),
-            23 => array($vq, ak_bl_vo('GRENZE'), 'BAUSTEIN.B23_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 22), 'vq'),
-            24 => array('BAUSTEIN.T_VE_REGLER', 'BAUSTEIN.B24_N', 'BAUSTEIN.B24_P', '', ''),
-            25 => array($vq, ak_bl_vo('RESERVE'), 'BAUSTEIN.B23_P', sprintf(ak_t('BAUSTEIN.E_EIN'), 24), 'vq'),
-            26 => array('BAUSTEIN.T_VE_TASTE', 'BAUSTEIN.B26_N', 'BAUSTEIN.B26_P', '', ''),
-            27 => array($vq, ak_bl_vo('ABRUF'), '', sprintf(ak_t('BAUSTEIN.E_EIN'), 26), 'vq'),
-            28 => array('BAUSTEIN.T_STATUS', 'BAUSTEIN.B28_N', 'BAUSTEIN.B28_P', 'V1 = #8, V2 = #15, V3 = #4', ''),
-        ),
-        ),
-    );
-}
-?>
-
-<div class="sm-step"><b><?= ak_e(ak_t('LOX.S10_TITEL')) ?></b><br>
-<?= ak_t('LOX.S10_TEXT') ?>
-<?php foreach (ak_bl_seiten() as $ak_bs) { ?>
-<h3><?= ak_e($ak_bs['titel']) ?></h3>
-<div class="sm-hinweis"><b><?= ak_e(ak_t('BAUSTEIN.SO_TITEL')) ?></b>
-<ol>
-<?php foreach ($ak_bs['schritte'] as $ak_bsch) { ?>
-<li><?= $ak_bsch ?></li>
-<?php } ?>
-</ol>
-</div>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th>#</th><th><?= ak_e(ak_t('LOX.T_BAUSTEIN')) ?></th><th><?= ak_e(ak_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
-    <th><?= ak_e(ak_t('LOX.T_PARAMETER')) ?></th><th><?= ak_e(ak_t('LOX.T_EINGAENGE')) ?></th></tr>
-<?php foreach ($ak_bs['zeilen'] as $ak_bn => $ak_b) {
-    $ak_bp = ak_bl_text($ak_b[2]);
-    $ak_be = ak_bl_text($ak_b[3]); ?>
-<tr><td><?= (int) $ak_bn ?></td><td><?= ak_e(ak_bl_text($ak_b[0])) ?></td>
-    <td><?= $ak_b[4] === 'vi' ? '<span class="sm-mono">' . ak_e(ak_bl_text($ak_b[1])) . '</span>'
-             : ak_e(ak_bl_text($ak_b[1])) ?></td>
-    <td><?= $ak_bp !== '' ? ak_e($ak_bp) : '&mdash;' ?></td>
-    <td><?= $ak_be !== '' ? ak_e($ak_be) : '&mdash;' ?></td></tr>
-<?php } ?>
-</table>
-</div>
-<p class="sm-hilfe"><b><?= ak_e(ak_t('BAUSTEIN.H_TITEL')) ?></b></p>
-<ul class="sm-hilfe">
-<?php foreach ($ak_bs['hinweise'] as $ak_bh) { ?>
-<li><?= ak_t('BAUSTEIN.' . $ak_bh) ?></li>
-<?php } ?>
-</ul>
-<figure class="sm-bild">
-<img src="<?= ak_e($ak_bs['bild']) ?>" alt="<?= ak_e(sprintf(ak_t('LOX.BILD_ALT'), $ak_bs['titel'])) ?>" loading="lazy">
-<figcaption><?= ak_e(sprintf(ak_t('LOX.BILD_UNTERSCHRIFT'), $ak_bs['seite'])) ?></figcaption>
-</figure>
-<p class="sm-hilfe"><?= ak_t('LOX.MUSTERPROJEKT') ?></p>
-<?php } ?>
-</div>
-
-<div class="sm-step"><b><?= ak_e(ak_t('LOX.S11_TITEL')) ?></b><br>
-<?= ak_t('LOX.S11_TEXT') ?>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th><?= ak_e(ak_t('LOX.T_PRUEFUNG')) ?></th><th><?= ak_e(ak_t('LOX.T_ERWARTUNG')) ?></th></tr>
-<tr><td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'selftest'))) ?></span></td>
-    <td><span class="sm-mono">SELFTEST;OK=1;TOKEN=OK</span></td></tr>
-<tr><td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'status', 'anlage' => 1))) ?></span></td>
-    <td><span class="sm-mono">ANKER;OK=1;SOC=...</span></td></tr>
-<tr><td><span class="sm-mono"><?= ak_e($ak_basis) ?>?aktion=status</span></td>
-    <td><span class="sm-mono">FEHLER;OK=0;GRUND=TOKEN</span> (HTTP 403)</td></tr>
-<tr><td><span class="sm-mono"><?= ak_e(ak_adresse(array('aktion' => 'quatsch'))) ?></span></td>
-    <td><span class="sm-mono">FEHLER;OK=0;GRUND=UNBEKANNTE_AKTION</span> (HTTP 400)</td></tr>
-</table>
-</div>
-</div>
+</details>
 </div>
 
 <!-- ================= Reiter: Test ================= -->
 <div class="sm-seite<?= $ak_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= ak_e(ak_t('TEST.H_SELBSTPRUEFUNG')) ?></h2>
+<?php /* Eine Legende oben im Reiter (Regeln/04, N13). */ ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= ak_t('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= ak_t('LEGENDE.TECHNIK') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span>
+</div>
 <p class="sm-hilfe"><?= ak_t('TEST.EINLEITUNG') ?></p>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th style="width:36px;">&nbsp;</th><th><?= ak_e(ak_t('TEST.T_FRAGE')) ?></th><th><?= ak_e(ak_t('TEST.T_BEFUND')) ?></th></tr>
-<?php foreach (ak_pruefungen() as $ak_z) { ?>
+<?php if (!$ak_test_offen) { ?>
+<tr><td style="text-align:center;"><span style="color:#888;">&#9679;</span></td>
+    <td><?= ak_e(ak_t('TEST.F_NUR_OFFEN')) ?></td><td><?= ak_t('TEST.A_NUR_OFFEN') ?></td></tr>
+<?php } ?>
+<?php foreach ($ak_test_offen ? ak_pruefungen() : array() as $ak_z) { ?>
 <tr><td style="text-align:center;"><?php
     if ($ak_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
     elseif ($ak_z['stand'] === 0) { echo '<span class="sm-aus">&#10008;</span>'; }
@@ -1644,20 +1783,17 @@ usort($ak_wtl, function ($a, $b) {
 <?php } ?>
 
 <h3><?= ak_e(ak_t('TEST.H_LESEN')) ?></h3>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?= ak_t('LEGENDE.LESEN') ?></span>
-</div>
 <div class="sm-knopfreihe">
+<?php /* Seit 0.9.32 (E-E21): die Lesezweig-Knoepfe nur, wenn der Lesezweig offen ist - sonst antwortete jeder mit 403. */ ?>
+<?php if (!empty($ak_cfg['endpunkt_ein'])) { ?>
   <a data-role="none" class="sm-btn sm-b-lesen" href="<?= ak_e(ak_adresse(array('aktion' => 'status', 'anlage' => 1))) ?>" target="_blank"><?= ak_e(ak_t('TEST.K_STATUS')) ?></a>
   <a data-role="none" class="sm-btn sm-b-lesen" href="<?= ak_e(ak_adresse(array('aktion' => 'energie', 'anlage' => 1))) ?>" target="_blank"><?= ak_e(ak_t('TEST.K_ENERGIE')) ?></a>
   <a data-role="none" class="sm-btn sm-b-lesen" href="<?= ak_e(ak_adresse(array('aktion' => 'anlagen'))) ?>" target="_blank"><?= ak_e(ak_t('TEST.K_ANLAGEN')) ?></a>
+<?php } ?>
   <a data-role="none" class="sm-btn sm-b-lesen" href="<?= ak_e(ak_adresse(array('aktion' => 'selftest'))) ?>" target="_blank"><?= ak_e(ak_t('TEST.K_SELFTEST')) ?></a>
 </div>
 
 <h3><?= ak_e(ak_t('TEST.H_TECHNIK')) ?></h3>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?= ak_t('LEGENDE.TECHNIK') ?></span>
-</div>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
@@ -1734,22 +1870,29 @@ if (isset($_GET['rohdaten'])) {
 <div class="sm-feld">
   <label for="test_trocken"><?= ak_e(ak_t('TEST.L_TROCKEN')) ?></label>
   <select data-role="none" id="test_trocken" name="test_trocken">
-<?php foreach (array('hauslast' => 'TEST.K_HAUSLAST', 'modus' => 'TEST.K_MODUS', 'reserve' => 'TEST.K_RESERVE') as $ak_tw => $ak_tk) { ?>
+<?php /* K18 (seit 0.9.32): alle sieben Befehle des Endpunkts. */ ?>
+<?php foreach (ak_trocken_aktionen() as $ak_tw => $ak_tk) { ?>
     <option value="<?= ak_e($ak_tw) ?>"<?= ak_eingabe('test', 'test_trocken', 'hauslast') === $ak_tw ? ' selected' : '' ?>><?= ak_e(ak_t($ak_tk)) ?></option>
 <?php } ?>
   </select>
+  <div class="sm-hilfe"><?= ak_t('TEST.H_TROCKEN_WERTE') ?></div>
 </div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?= ak_t('LEGENDE.TECHNIK') ?></span>
+<?php if ($ak_geraete) { ?>
+<div class="sm-feld">
+  <label for="test_sn"><?= ak_e(ak_t('TEST.L_SN')) ?></label>
+  <select data-role="none" id="test_sn" name="test_sn"<?= ak_markierung('test_sn') ?>>
+    <option value="">&ndash;</option>
+<?php foreach ($ak_geraete as $ak_sn => $ak_g) { ?>
+    <option value="<?= ak_e($ak_sn) ?>"<?= ak_eingabe('test', 'test_sn', '') === (string) $ak_sn ? ' selected' : '' ?>><?= ak_e($ak_g['name'] . ' (' . $ak_sn . ')') ?></option>
+<?php } ?>
+  </select>
 </div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="trockenlauf" value="1"><?= ak_e(ak_t('TEST.K_TROCKEN')) ?></button>
 </div>
 
 <h3><?= ak_e(ak_t('TEST.H_SCHARF')) ?></h3>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION') ?></span>
-</div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="abruf"><?= ak_e(ak_t('TEST.K_ABRUF')) ?></button>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="hauslast_test"><?= ak_e(ak_t('TEST.K_HAUSLAST')) ?></button>
@@ -1784,11 +1927,11 @@ if (isset($_GET['rohdaten'])) {
 <!-- ================= Reiter: Logdateien ================= -->
 <div class="sm-seite<?= $ak_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
 <h2><?= ak_e(ak_t('LOG.H_TITEL')) ?></h2>
-<?php
-if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
-    echo LBWeb::loglist_html();
-}
-?>
+<?php /* K8 (seit 0.9.32, Docker-Form): kein loglist_html() mehr - LoxBerry::Log kennt das Protokoll des Dienstes
+         nicht (der RotatingFileHandler meldet es nicht an), die Liste darueber blieb leer. Eine Legende oben. */ ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION_LOG') ?></span>
+</div>
 <p class="sm-hilfe"><?= ak_t('LOG.ERKLAERUNG') ?><br>
 <span class="sm-mono"><?= ak_e($ak_p['log']) ?></span></p>
 <?php if ($ak_logzeilen) { ?>
@@ -1806,16 +1949,20 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
 <div class="sm-hinweis"><?= ak_t('LOG.LEER') ?></div>
 <?php } ?>
 
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ak_t('LEGENDE.AKTION_LOG') ?></span>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
+<input data-role="none" type="hidden" name="activetab" value="tab-log">
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="log_bestaetigt" value="1">
+    <?= ak_e(ak_t('LOG.L_BESTAETIGEN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= ak_t('LOG.H_BESTAETIGEN') ?></div>
 </div>
 <div class="sm-knopfreihe">
-  <form action="index.php" method="post">
-    <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
-    <input data-role="none" type="hidden" name="activetab" value="tab-log">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="log_leeren" value="1"><?= ak_e(ak_t('LOG.K_LEEREN')) ?></button>
-  </form>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="log_leeren" value="1"><?= ak_e(ak_t('LOG.K_LEEREN')) ?></button>
 </div>
+</form>
 </div>
 
 </div><!-- /sm-wrap -->
@@ -1830,7 +1977,21 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
 		if (history.replaceState) { history.replaceState(null, '', 'index.php?form=' + id.replace('tab-', '')); }
 	}
 	reiter.forEach(function (r) {
-		r.addEventListener('click', function (e) { e.preventDefault(); zeige(r.dataset.ziel); });
+		/* E2 (seit 0.9.32, wie Docker D22): der Reiter Test laedt die Seite neu (index.php?form=test) - geprueft
+		   wird nur dort; die uebrigen Reiter schalten ohne Seitenwechsel um. */
+		r.addEventListener('click', function (e) {
+			if (r.dataset.ziel === 'tab-test') { return; }
+			e.preventDefault(); zeige(r.dataset.ziel);
+		});
+	});
+	/* Gruppe 26: Kopierknopf der Namenstabelle (liest nur). */
+	document.querySelectorAll('.sm-kopie').forEach(function (k) {
+		k.addEventListener('click', function () {
+			var t = k.getAttribute('data-kopie') || '';
+			if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t); }
+			else { var a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select();
+			       try { document.execCommand('copy'); } catch (x) {} document.body.removeChild(a); }
+		});
 	});
 	// Der Server hat sm-active bereits gesetzt; dieser Aufruf richtet nur die
 	// versteckten activetab-Felder aus und ist ansonsten wirkungslos.
