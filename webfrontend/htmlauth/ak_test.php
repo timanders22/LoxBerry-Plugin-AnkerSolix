@@ -346,6 +346,11 @@ function ak_pruefungen()
         $zeilen[] = ak_pruefzeile(0, ak_t('TEST.F_MQTT'), ak_t('TEST.A_MQTT_AUS'));
     }
 
+    /* Nachtwelle N4 (0.9.33): stehen unter MQTT-Gateway V2 die Haken der Hakenliste (Reiter MQTT) mit dem richtigen
+       Noncached? Liest config/system/subscriptions.json; unter V1 und bei ausgeschaltetem MQTT ein Hinweis. */
+    list($ak_v2s, $ak_v2t) = ak_v2_haken_lage($cfg);
+    $zeilen[] = ak_pruefzeile($ak_v2s === 2 ? -1 : $ak_v2s, ak_t('TEST.F_V2_HAKEN'), ak_e($ak_v2t));
+
     /* --- 7. Steuerung --- */
     $zeilen[] = ak_pruefzeile(!empty($cfg['steuerung_ein']) ? 1 : -1, ak_t('TEST.F_STEUERUNG'),
         !empty($cfg['steuerung_ein']) ? ak_t('TEST.A_STEUERUNG_EIN') : ak_t('TEST.A_STEUERUNG_AUS'));

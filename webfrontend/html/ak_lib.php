@@ -2487,6 +2487,140 @@ function ak_mqtt_namenstabelle($cfg)
     return $aus;
 }
 
+/* ---------------- Gateway V2: Selbsttest der Haken (Nachtwelle N4, 0.9.33) ---------------- */
+
+/**
+ * Die Abos des MQTT-Gateways V2 aus config/system/subscriptions.json (Subscriptions[].Id je Thema, Noncached):
+ * array(Thema => Noncached ja/nein), null = nicht lesbar. Form wie MGiSmart 1.1.28 mg_v2_abos() und Govee 0.9.30
+ * gv_mqtt_v2_haken_lage(); die Datei liest ak_v2_haken_lage().
+ */
+function ak_v2_abos($daten)
+{
+    if (!is_array($daten)) {
+        return null;
+    }
+    $liste = array();
+    foreach (array('Subscriptions', 'subscriptions') as $s) {
+        if (isset($daten[$s]) && is_array($daten[$s])) {
+            $liste = $daten[$s];
+            break;
+        }
+    }
+    $abo = array();
+    foreach ($liste as $e) {
+        if (!is_array($e)) {
+            continue;
+        }
+        $id = '';
+        foreach (array('Id', 'id', 'Topic', 'topic') as $k) {
+            if (isset($e[$k]) && is_string($e[$k])) {
+                $id = $e[$k];
+                break;
+            }
+        }
+        if ($id === '') {
+            continue;
+        }
+        $nc = false;
+        foreach (array('Noncached', 'noncached') as $k) {
+            if (isset($e[$k])) {
+                $nc = ($e[$k] === true || in_array(strtolower(trim((string) $e[$k])), array('1', 'true', 'yes', 'on'), true));
+            }
+        }
+        $abo[$id] = $nc;
+    }
+    return $abo;
+}
+
+/**
+ * Soll gegen Ist, rein (liest nichts): array(1|0, fehlt[], noncached_fehlt[], noncached_zu_viel[], angehakt, soll).
+ * Soll je Zeile array('thema' => volles Thema, 'name' => Gateway-Name, 'noncached' => bool). Noncached wird in
+ * beide Richtungen verglichen: fehlt es, reicht das Gateway einen gleichen Wert nicht weiter; steht es zu viel, geht
+ * jeder Wert erneut an den Miniserver.
+ */
+function ak_v2_haken_abgleich(array $soll, array $abo)
+{
+    $fehlt = array();
+    $nc_fehlt = array();
+    $nc_zuviel = array();
+    $da = 0;
+    foreach ($soll as $e) {
+        if (!array_key_exists($e['thema'], $abo)) {
+            $fehlt[] = $e['name'];
+            continue;
+        }
+        $da++;
+        if ($e['noncached'] && !$abo[$e['thema']]) {
+            $nc_fehlt[] = $e['name'];
+        } elseif (!$e['noncached'] && $abo[$e['thema']]) {
+            $nc_zuviel[] = $e['name'];
+        }
+    }
+    return array(($fehlt || $nc_fehlt || $nc_zuviel) ? 0 : 1, $fehlt, $nc_fehlt, $nc_zuviel, $da, count($soll));
+}
+
+/**
+ * Das Soll fuer den Selbsttest: die Zeilen der Namenstabelle mit Haken (ak_mqtt_namenstabelle() - DIESELBE Funktion
+ * wie die V2-Hakenliste im Reiter MQTT, Regeln/07; 25 Haken bei Anlage 1), ohne Textthemen. Noncached: status/ok.
+ */
+function ak_v2_haken_soll($cfg)
+{
+    $aus = array();
+    foreach (ak_mqtt_namenstabelle($cfg) as $z) {
+        if (!$z['haken'] || $z['text']) {
+            continue;
+        }
+        $aus[] = array('thema' => $z['voll'], 'name' => $z['name'], 'noncached' => (bool) $z['noncached']);
+    }
+    return $aus;
+}
+
+/**
+ * Selbsttestzeile "Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?" (Nachtwelle N4, Vorschrift Punkt 4):
+ * array(1|0|2, Text ohne Markup). 1 alle Haken da und Noncached wie in der Hakenliste; 0 es fehlt ein Haken oder
+ * Noncached stimmt nicht (mit Namen); 2 trifft nicht zu (MQTT dieses Plugins aus, Gateway V1) oder nicht
+ * feststellbar (Fassung 0, keine Wurzel, subscriptions.json nicht lesbar). Liest nur.
+ */
+function ak_v2_haken_lage($cfg = null)
+{
+    if ($cfg === null) {
+        $cfg = ak_config(false);
+    }
+    if (empty($cfg['mqtt_ein'])) {
+        return array(2, ak_t('TEST.V2_AUS'));
+    }
+    $m = ak_mqtt_zustand();
+    $fassung = (int) $m['fassung'];
+    $home = (string) ak_paths()['home'];
+    if ($fassung === 0 || $home === '') {
+        return array(2, ak_t('TEST.V2_UNKLAR'));
+    }
+    if ($fassung < 2) {
+        return array(2, ak_t('TEST.V2_V1'));
+    }
+    $abo = ak_v2_abos(@json_decode((string) @file_get_contents($home . '/config/system/subscriptions.json'), true));
+    if ($abo === null) {
+        return array(2, ak_t('TEST.V2_UNKLAR'));
+    }
+    $liste = ak_v2_haken_soll($cfg);
+    if (!$liste) {
+        return array(2, ak_t('TEST.V2_LEER'));   // leere Hakenliste: kein Urteil (Hausform wie N7)
+    }
+    list($ok, $fehlt, $nc_fehlt, $nc_zuviel, $da, $soll) = ak_v2_haken_abgleich($liste, $abo);
+    $txt = sprintf(ak_t('TEST.V2_ZAHL'), $da, $soll);
+    if ($fehlt) {
+        $txt .= ' ' . sprintf(ak_t('TEST.V2_FEHLT'), implode(', ', array_slice($fehlt, 0, 12))
+            . (count($fehlt) > 12 ? ' …' : ''));
+    }
+    if ($nc_fehlt) {
+        $txt .= ' ' . sprintf(ak_t('TEST.V2_NC_FEHLT'), implode(', ', $nc_fehlt));
+    }
+    if ($nc_zuviel) {
+        $txt .= ' ' . sprintf(ak_t('TEST.V2_NC_ZUVIEL'), implode(', ', $nc_zuviel));
+    }
+    return array($ok, $txt);
+}
+
 /** Die EVCC-Werte, die die Seite "AnkerSolix Steuerung" fuer den EVCC-Vorrang braucht (V3, E-E18). */
 function ak_evcc_werte()
 {
@@ -2672,7 +2806,9 @@ function ak_vo_befehle_mqtt($nummer = 1)
     return $aus;
 }
 
-/** Die Brueckenvorlage VQ_ankersolix_steuern.xml (VirtualOut an /dev/udp/<LoxBerry>/<Udpinport>, ohne Token). */
+/** Die Brueckenvorlage VQ_ankersolix_steuern.xml (VirtualOut an /dev/udp/<LoxBerry>/<Udpinport>, ohne Token).
+ * Seit 0.9.33 (Nachtwelle N4) CRLF wie bb_vorlage() der Bruecke 1.0.2 und die Ausfuhren der Loxone Config
+ * (Regeln/07); Inhalt sonst byte-gleich zu 0.9.32. */
 function ak_vo_vorlage_mqtt($nummer = 1)
 {
     $nummer = max(1, min(9, (int) $nummer));
@@ -2690,7 +2826,7 @@ function ak_vo_vorlage_mqtt($nummer = 1)
             . ($b[2] ? ' SourceValLow="0" DestValLow="0" SourceValHigh="10" DestValHigh="10"' : '') . ' HintText=""/>';
     }
     $z[] = '</VirtualOut>';
-    return array('VQ_ankersolix_steuern' . ($nummer > 1 ? $nummer : '') . '.xml', implode("\n", $z) . "\n");
+    return array('VQ_ankersolix_steuern' . ($nummer > 1 ? $nummer : '') . '.xml', implode("\r\n", $z) . "\r\n");
 }
 
 /* ---------------- Abraeumen anstossen (K22, E-E9) ---------------- */

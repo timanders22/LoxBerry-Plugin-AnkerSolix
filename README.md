@@ -16,6 +16,18 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.33
+
+Pflegefassung der Nachtwelle (29.10.2026), ohne neue Funktion und ohne Änderung am Verhalten:
+
+* **Befehlsbrücke 1.0.2** (gemeinsame Stammfassung). Die Vorlage „AnkerSolix steuern (MQTT)“ (`VQ_ankersolix_steuern.xml`) baut das Plugin selbst;
+  sie kommt jetzt wie die Ausfuhren der Loxone Config mit Windows-Zeilenenden (CRLF). Titel, Adresse und
+  Befehle sind unverändert, ein Neuimport ist nicht nötig.
+* **Reiter Test, neue Zeile „Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?“** Unter MQTT-Gateway V2
+  liest das Plugin `config/system/subscriptions.json` und nennt jeden Datenpunkt der Hakenliste (Reiter MQTT, Anlage 1),
+  der dort nicht angehakt ist, und jeden, bei dem „Noncached“ nicht stimmt (`status/ok` braucht es, die übrigen nicht).
+  Unter Gateway V1 und bei ausgeschalteter MQTT-Veröffentlichung heißt die Zeile „trifft nicht zu“.
+
 ## Version 0.9.32
 
 **Werte und Befehle über das MQTT-Gateway** – die Hausform der übrigen Plugins. Der HTTP-Endpunkt bleibt für
