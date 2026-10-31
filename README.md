@@ -16,6 +16,10 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Version 0.9.34
+
+Bilder der Einbindung erneuert: Das Bild der Seite „AnkerSolix“ (Werte) zeigt die neu angeordnete Seite. Sonst keine Änderung gegen 0.9.33.
+
 ## Version 0.9.33
 
 Pflegefassung der Nachtwelle (29.10.2026), ohne neue Funktion und ohne Änderung am Verhalten:
