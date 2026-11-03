@@ -592,6 +592,27 @@ def benachrichtigen(schwere: int, text: str, schluessel: str = "", sekunden: int
     _LETZTE_MELDUNG["notify_" + schluessel] = jetzt
 
 
+ANSAGE_BRUECKE = Path(__file__).resolve().parent / "ak_ansage.php"
+_ANSAGE_AUSFALL = [False]
+
+
+def ansage(anlass: str) -> None:
+    """Einen Anlass an bin/ak_ansage.php geben (seit 0.9.35). Die Bruecke legt nur hin und kehrt zurueck;
+    Ausgabeart, Nachtruhe, Sperre und Schalter prueft die gemeinsame Sprachausgabe. Ein Fehler stoert den Dienst nicht."""
+    try:
+        subprocess.run(["php", str(ANSAGE_BRUECKE), anlass, PNAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("ansage", f"Ansage nicht moeglich: {err}")
+
+
+def ansage_ausfall(gestoert: bool) -> None:
+    """Nur die Flanke spricht: der Eintritt einmal, die Rueckkehr einmal."""
+    if gestoert != _ANSAGE_AUSFALL[0]:
+        _ANSAGE_AUSFALL[0] = gestoert
+        ansage("ausfall" if gestoert else "wieder")
+
+
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
@@ -2467,6 +2488,7 @@ async def rueckfall_pruefen(api, cfg: dict) -> None:
                 f"'{modus}' zurueckgestellt ({', '.join(getan)}).")
         _LOG.warning(text)
         benachrichtigen(4, text, "rueckfall", 3600)
+        ansage("rueckfall")
 
 
 # ---------------------------------------------------------------------------
@@ -2840,8 +2862,10 @@ async def _dienst_lauf(einmal: bool, freigeben: bool, frist, z: dict, leser) -> 
                         else "bisher kein erfolgreicher Abruf")
                 benachrichtigen(3, f"Anker SOLIX: {seit}. Letzte Meldung: {fehler or 'unbekannt'}",
                                 "abruf_alt")
+                ansage_ausfall(True)
 
             if ok:
+                ansage_ausfall(False)
                 await rueckfall_pruefen(api, cfg)
                 _LOG.debug("Abruf %s: %s Anlagen, %s Geraete", zyklus, len(api.sites), len(api.devices))
             zyklus += 1

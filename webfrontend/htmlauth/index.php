@@ -451,6 +451,19 @@ if ($ak_post && isset($_POST['save_endpunkt'])) {
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
+/* 0.9.35: Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+if ($ak_post && isset($_POST['ansage_test'])) {
+    list($ak_at, $ak_ag) = ak_ansage_test();
+    if ($ak_at) { $ak_meldungen[] = ak_e(ak_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $ak_fehler[] = ak_e(ak_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $ak_ag); }
+    $ak_tab = 'tab-settings';
+}
+if ($ak_post && isset($_POST['ansage_speichern'])) {
+    list($ak_ao, $ak_af, $ak_ah) = ak_ansage_post($_POST);
+    if ($ak_af) { foreach ($ak_af as $ak_ax) { $ak_fehler[] = ak_e($ak_ax); } }
+    elseif ($ak_ao) { $ak_meldungen[] = ak_e(trim(ak_t('ANSAGEPLUGIN.M_OK') . ' ' . implode(' ', $ak_ah))); }
+    else { $ak_fehler[] = ak_e(ak_t('ANSAGEPLUGIN.M_FEHL')); }
+    $ak_tab = 'tab-settings';
+}
 if ($ak_post && isset($_POST['dienst'])) {
     $ak_befehl = (string) $_POST['dienst'];
     list($ak_ok, $ak_ausgabe) = ak_dienst($ak_befehl);
@@ -1136,6 +1149,7 @@ if ($ak_rahmen) {
 <p class="sm-hilfe"><?= ak_t('EINST.H_WEG') ?></p>
 <?php } ?>
 
+<?= ak_ansage_form_html('<input data-role="none" type="hidden" name="formtoken" value="' . ak_e($ak_formtoken) . '"><input data-role="none" type="hidden" name="activetab" value="tab-settings">') ?>
 <h2><?= ak_e(ak_t('EINST.H_SICHERUNG')) ?></h2>
 <div class="sm-hinweis"><?= ak_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= ak_t('EINST.SICH_WARNUNG') ?></div>

@@ -16,6 +16,17 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Neu in 0.9.35
+
+**Ab dieser Fassung sind die Sprachansagen ab Werk an, auch nach einem Update, wenn Sie die Ausgabeart nie gespeichert haben.** Eine gespeicherte Einstellung bleibt, wie sie ist, auch „aus“. **Ausschalten:** Reiter *Einstellungen*, Abschnitt *Sprachansagen*, Ausgabeart **„aus“** wählen und speichern; das bleibt auch nach jedem weiteren Update aus.
+
+* **Was angesagt wird:** die Anker-Cloud antwortet seit längerem nicht und wieder da (nur nach einer angesagten Störung), Rückfall der Betriebsart, weil kein Sollwert mehr kam; nachts schweigt alles davon.
+* **Wohin:** ab Werk zugleich Loxone Music Server (braucht seine Adresse), Google-Lautsprecher über Chromecast4lox (braucht dort ein Standardgerät oder hier den Namen) und Amazon Echo über Alexa-NG. Ein Ziel, das nicht bereitsteht, wird ohne Fehler übergangen; der Abschnitt *Sprachansagen* sagt, was ihm fehlt. Das Sprechtoken der beiden Plugins müssen Sie nicht abschreiben: Es wird übernommen, in der Konfiguration gespeichert und nachgezogen; ein von Hand eingetragenes bleibt.
+* **Wann nicht:** Nachtruhe 22 bis 7 Uhr (einstellbar, wird nicht nachgeholt; Dringendes spricht trotzdem), dieselbe Ansage höchstens einmal in 30 Minuten (einstellbar) und solange Loxone das retained MQTT-Thema `haus/ansage/ruhe` auf 1 setzt (das gilt auch für Dringendes). Die Testansage spricht immer. Ausgabeart, Ziele und Regeln reisen in der Sicherung mit, das Sprechtoken nie.
+* **Der Minutenlauf wartet nicht auf Lautsprecher:** Gesprochen wird in einem eigenen Vorgang.
+* **Berichtigt:** Die Zeilen der Befehlsbrücke im Protokoll tragen das Wort „Befehlsbruecke“ nur noch einmal. Der Leser der Haus-Themen hat jetzt auch beim Lesen eines Pakets eine feste Frist.
+
+
 ## Version 0.9.34
 
 Bilder der Einbindung erneuert: Das Bild der Seite „AnkerSolix“ (Werte) zeigt die neu angeordnete Seite. Sonst keine Änderung gegen 0.9.33.
