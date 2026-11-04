@@ -214,6 +214,7 @@ if ($ak_post && isset($_POST['vorlage'])) {
     }
     if ($ak_datei !== null) {
         list($ak_name, $ak_inhalt) = $ak_datei;
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: ' . ($ak_art === 'alles' ? 'application/zip' : 'application/xml') . '; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $ak_name . '"');
         echo $ak_inhalt;
@@ -576,6 +577,7 @@ if ($ak_post && isset($_POST['ak_sichern'])) {
     $ak_js = ak_sicherung_bauen($ak_altw
         ? sprintf(ak_t('EINST.SICH_ALTWERT_KOPF'), implode(', ', $ak_altw)) : '');
     if ($ak_js !== false) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="ankersolix_einstellungen_'
                . date('Ymd_His') . '.json"');
