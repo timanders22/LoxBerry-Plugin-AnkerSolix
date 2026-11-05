@@ -16,6 +16,13 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Neu in 0.9.38
+
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Dienst:** Ein unbekannter Schalter von Hand startet nicht mehr den Dauerdienst.
+- **Formular:** Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen.
+
 ## Neu in 0.9.37
 
 - Vor einem Download wird jeder offene Ausgabepuffer geleert: PHP-Warnungen oder Reste landen nicht mehr in der heruntergeladenen Datei.
@@ -767,6 +774,8 @@ Liegt ein `hauslast`-Wert nur innerhalb der eingestellten **Schrittweite**
 neben dem gesetzten Sollwert, sendet der Dienst ebenfalls nichts. Das ist kein
 Fehler: die Antwort lautet `SET;OK=1;AKTION=hauslast;UNVERAENDERT=1;MELDUNG=…`
 (HTTP 200, ohne `SEIT_S`), auch während die Schreibbremse greift.
+
+Der **Rückfall** greift seit 0.9.38 **einmal je Ausfall**, auch über einen Neustart des Dienstes hinweg. Was Sie danach in der Anker-App einstellen, bleibt, bis wieder ein Sollwert von Loxone kam oder das Plugin einen Schreibbefehl gesendet hat; erst der nächste Ausfall löst ihn wieder aus. Scheitert er an der Cloud, versucht er es im selben Abstand erneut, nur für die Speicher, die noch ausstehen.
 
 Der **Rückfall** (Reiter *Einstellungen*, ab Werk aus) misst die Zeit seit dem
 letzten gültigen Sollwert von Loxone, nicht nur seit dem letzten gesendeten:

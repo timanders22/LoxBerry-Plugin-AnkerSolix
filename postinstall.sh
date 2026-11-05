@@ -262,7 +262,7 @@ if [ ! -x "$VENV/bin/python3" ]; then
     exit 1
 fi
 
-"$VENV/bin/python3" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || \
+timeout 900 "$VENV/bin/python3" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null 2>&1 || \
     echo "<INFO> pip liess sich nicht aktualisieren - wird mit der vorhandenen Fassung versucht."
 
 # Auf 32-Bit-ARM (aeltere Raspberry Pi) gibt es fuer manche Abhaengigkeiten
@@ -310,7 +310,7 @@ fi
 # Argumente); "<" und "," sind dabei keine Steuerzeichen der Schale.
 LIBDEPS="aiohttp>=3.10.11 aiofiles>=25.1.0 cryptography>=3.4.8 paho-mqtt>=2.1.0,<3 python-dotenv>=1.2.1"
 echo "<INFO> Installiere die Abhaengigkeiten der Bibliothek ..."
-if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary $LIBDEPS; then
+if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary $LIBDEPS; then
     echo "<FAIL> Die Abhaengigkeiten der Bibliothek liessen sich nicht installieren."
     echo "<FAIL> Betroffen: $LIBDEPS"
     echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, oder fuer diese"
@@ -324,9 +324,9 @@ echo "<INFO> Installiere anker-solix-api $LIBTAG (benoetigt eine Internetverbind
 # --prefer-binary: lieber ein fertiges Wheel als selbst uebersetzen. Auf
 # 32-Bit-ARM (aeltere Raspberry Pi) fehlen fuer manche Abhaengigkeiten die
 # vorgebauten Pakete, und ohne Uebersetzer bricht die Installation ab.
-if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary "$LIBURL"; then
+if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary "$LIBURL"; then
     echo "<INFO> Feste Fassung $LIBTAG nicht installierbar - versuche den Hauptzweig."
-    if ! "$VENV/bin/python3" -m pip install --no-cache-dir --prefer-binary \
+    if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary \
         "git+https://github.com/thomluther/anker-solix-api.git@main"; then
         echo "<FAIL> anker-solix-api konnte nicht installiert werden."
         echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, GitHub nicht"

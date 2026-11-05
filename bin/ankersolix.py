@@ -152,6 +152,8 @@ DATEI_LETZTER_SCHREIB = PDATA / "letzter_schreibbefehl"
 # beide schreiben unter flock auf die Sperrdatei.
 DATEI_SOLLWERT_EMPFANGEN = PDATA / "sollwert_empfangen"
 DATEI_SOLLWERT_SPERRE = PDATA / "sollwert_empfangen.sperre"
+# 0.9.38 (AK-1): der Rueckfall dieses Ausfalls ist erledigt; ueberlebt einen Neustart des Dienstes.
+DATEI_RUECKFALL_MERKER = PDATA / "rueckfall_merker.json"
 # Ein Merker weiter als so viele Sekunden in der Zukunft gilt als ungueltig.
 SOLLWERT_ZUKUNFT_S = 60
 # Die Warteschlange der Auftraege (Endpunkt, Reiter Test, Befehlsbruecke).
@@ -2453,7 +2455,38 @@ async def warteschlange(api, cfg: dict) -> bool:
 # (sollwert_empfangen, Entscheidung Nr. 22). Bis 0.9.26 nur ab dem gesendeten:
 # einen gleichbleibenden Sollwert senden Gleichwert-Unterdrueckung (60 s) und
 # Schrittweite nicht erneut, und der Rueckfall griff, obwohl Loxone lebte.
+#
+# 0.9.38 (AK-1, Entscheidung Hausherr 05.11.2026): EINMAL je Ausfall. Bis 0.9.37
+# griff er ohne Sollwert alle rueckfall_min Minuten wieder (gemessen 24 h bei
+# 30 min: 48 Cloud-Schreibbefehle, 48 Ansagen) und ueberschrieb, was in der
+# Anker-App eingestellt wurde. Ein Ausfall endet erst mit einem neuen Sollwert
+# oder Schreibbefehl (bezug > Merker). Gescheitert wird weiter im Abstand
+# rueckfall_min wiederholt, aber nur fuer die Speicher, die noch ausstehen.
 # ---------------------------------------------------------------------------
+_RUECKFALL_MERKER = {"zeit": 0, "sn": [], "fertig": False}
+
+
+def rueckfall_merker_lesen() -> dict:
+    """Der Merker aus der Datei, ohne lesbare Datei der Stand dieses Prozesses (Schreiben gescheitert)."""
+    d = json_lesen(DATEI_RUECKFALL_MERKER)
+    if isinstance(d.get("zeit"), int) and isinstance(d.get("sn"), list):
+        return {"zeit": d["zeit"], "sn": [str(s) for s in d["sn"]], "fertig": bool(d.get("fertig"))}
+    return dict(_RUECKFALL_MERKER)
+
+
+def rueckfall_merker_schreiben(zeit: int, sn: list, fertig: bool) -> None:
+    _RUECKFALL_MERKER.update(zeit=zeit, sn=sn, fertig=fertig)
+    tmp = DATEI_RUECKFALL_MERKER.with_name(DATEI_RUECKFALL_MERKER.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="ascii") as f:
+            json.dump({"zeit": zeit, "sn": sn, "fertig": fertig}, f)
+        os.replace(tmp, DATEI_RUECKFALL_MERKER)
+    except OSError as err:
+        melde_gebremst("rueckfall_merker",
+                       f"Der Merker {DATEI_RUECKFALL_MERKER} laesst sich nicht schreiben ({err}); "
+                       "nach einem Neustart des Dienstes greift der Rueckfall deshalb noch einmal.")
+
+
 async def rueckfall_pruefen(api, cfg: dict) -> None:
     minuten = int(cfg.get("rueckfall_min") or 0)
     if minuten <= 0 or not cfg.get("steuerung_ein"):
@@ -2469,20 +2502,30 @@ async def rueckfall_pruefen(api, cfg: dict) -> None:
         return          # es gab nie einen Sollwert - also nichts zurueckzunehmen
     if (time.time() - bezug) < minuten * 60:
         return
+    merker = rueckfall_merker_lesen()
+    neuer_ausfall = bezug > merker["zeit"]
+    if not neuer_ausfall and merker["fertig"]:
+        return          # dieser Ausfall ist erledigt: die Anker-App bleibt, wie sie steht (AK-1)
+    erledigt = [] if neuer_ausfall else list(merker["sn"])
     modus = str(cfg.get("rueckfall_modus") or "eigenverbrauch")
     getan = []
+    gescheitert = False
     for site_id in sorted(api.sites.keys()):
         sn, geraet = speicher_waehlen(api, site_id, None)
-        if sn is None or (zahl(geraet.get("generation")) or 0) < 2:
+        if sn is None or (zahl(geraet.get("generation")) or 0) < 2 or sn in erledigt:
             continue
         try:
             await api.set_sb2_home_load(siteId=site_id, deviceSn=sn, usage_mode=MODI[modus])
             getan.append(sn)
         except Exception as err:  # noqa: BLE001
+            gescheitert = True
             _LOG.error("Rueckfall an %s fehlgeschlagen: %s", sn, fehlertext(err))
     # Den Merker in JEDEM Fall zuruecksetzen, auch wenn nichts gelang: sonst
     # rennt der Rueckfall bei jedem Durchlauf erneut gegen dieselbe Wand.
     schreibbefehl_vermerken()
+    # 0.9.38 (AK-1): erst nach dem Vermerk, sonst saehe der eigene Schreibbefehl aus wie ein neuer Sollwert.
+    alle = erledigt + getan
+    rueckfall_merker_schreiben(int(time.time()), alle, bool(alle) and not gescheitert)
     if getan:
         text = (f"Seit {minuten} min kam kein Sollwert mehr. Die Betriebsart wurde auf "
                 f"'{modus}' zurueckgestellt ({', '.join(getan)}).")
@@ -3083,6 +3126,14 @@ def selbsttest() -> int:
 
 
 def main() -> int:
+    # 0.9.38 (K8a): ein unbekannter Schalter (Tippfehler --selbtest) startet nicht den Dauerdienst. Wert nur hinter --abraeumen.
+    erlaubt = ("--vorgaben", "--themen", "--selbsttest", "--abraeumen", "--einmal", "--freigeben")
+    argv = sys.argv[1:]
+    fremd = [a for i, a in enumerate(argv) if a not in erlaubt and not (i > 0 and argv[i - 1] == "--abraeumen")]
+    if fremd:
+        sys.stderr.write("FEHLER: unbekannter Schalter %s. Erlaubt sind: %s. Es wurde nichts gestartet.\n"
+                         % (", ".join(fremd), ", ".join(erlaubt)))
+        return 2
     # --vorgaben braucht kein Protokoll und keine Pfade: es gibt nur die Liste
     # aus, damit die Oberflaeche sie gegen ihre eigene halten kann.
     if "--vorgaben" in sys.argv:

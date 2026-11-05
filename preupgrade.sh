@@ -8,6 +8,10 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-ankersolix}"
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$PFOLDER" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$PFOLDER' - nichts angefasst."; exit 2 ;;
+esac
 BASE="${ARGV5:-$LBHOMEDIR}"
 
 # ---------- Zuerst die Marke "Aktualisierung laeuft" ----------
@@ -29,14 +33,47 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # Die Marke liegt NEBEN dem Datenordner - purge_installation loescht den
 # Ordner selbst. Sie faellt zuerst, noch vor dem Anhalten: zwischen dem ersten
 # Befehl dieses Skripts und dem Anhalten kann der Minutentakt laufen.
+# 05.11.2026: ohne Wurzel wird nichts gesichert; Rueckgabewert 2, sonst liefe der Purge weiter.
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ] \
+   || [ ! -f "$BASE/config/system/general.json" ]; then
+    echo "<FAIL> Kein LoxBerry-Wurzelverzeichnis erkannt ('$BASE') - nichts gesichert, das Update wird abgebrochen."
+    exit 2
+fi
 mkdir -p "$BASE/data/plugins" 2>/dev/null
 date +%s > "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" 2>/dev/null
 if [ -s "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" ]; then
     echo "<OK> Dienststart und Oberflaeche bis zum Ende der Installation gesperrt."
 else
-    echo "<INFO> Die Marke fuer die laufende Aktualisierung liess sich nicht"
-    echo "<INFO> anlegen ($BASE/data/plugins/$PFOLDER.upgrade_laeuft)."
+    # 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+    rm -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" 2>/dev/null
+    echo "<FAIL> Die Marke $BASE/data/plugins/$PFOLDER.upgrade_laeuft liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    rm -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" 2>/dev/null
+    [ -f "$LIEF" ] && : > "$BASE/data/plugins/$PFOLDER/soll_laufen"
+    exit 2
+}
 
 # Die Befehlsbruecke anhalten (seit 0.9.32, E-E3; Bauart Ferien 1.2.29
 # preupgrade): die Marke liegt schon - der Waechter im Minutentakt startet sie
@@ -295,15 +332,12 @@ for f in ankersolix.json zugang.json; do
     # ankersolix.json das Aktionstoken: BEIDE 0600, bevor die Datei ihren Namen
     # bekommt. K2 (seit 0.9.32): bis 0.9.31 nur zugang.json - cp -p trug die
     # Rechte einer 0644-Konfiguration auf die Zweitschrift (Probe k2, Fall A/B).
-    NEU="$BK.neu.$$"
-    if ( umask 077; cp -p "$CF" "$NEU" ) 2>/dev/null \
-       && chmod 600 "$NEU" 2>/dev/null \
-       && cmp -s "$CF" "$NEU" && mv -f "$NEU" "$BK" 2>/dev/null; then
+    if zs_hinlegen "$CF" "$BK"; then
         echo "<INFO> $f gesichert."
     else
-        rm -f "$NEU" 2>/dev/null
         AK_WARN=1
         echo "<WARNING> $f liess sich NICHT sichern; eine vorhandene Sicherung bleibt unveraendert."
+        ZS_FEHL="$ZS_FEHL $f"
     fi
 done
 # Hinweis (seit 0.9.32, E-E12): neue Anlagen senden ab Werk ueber MQTT; eine
@@ -320,6 +354,7 @@ if [ -f "$CFGDIR/ankersolix.json" ] && command -v php >/dev/null 2>&1; then
         echo "<INFO> einschalten im Reiter MQTT (empfohlen; der HTTP-Endpunkt bleibt)."
     fi
 fi
+zs_schluss
 if [ "$AK_WARN" = 0 ]; then
     echo "<OK> preupgrade abgeschlossen."
 else
