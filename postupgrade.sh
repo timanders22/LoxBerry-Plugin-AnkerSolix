@@ -75,6 +75,24 @@ else
     echo "<INFO> php fehlt - endpunkt_ein wird nicht festgeschrieben (die Lese-Regel gilt)."
 fi
 
+# ---------- 1b. Konfiguration vervollstaendigen (seit 0.9.41, Regeln/05) ----------
+# Fehlende Schluessel einmal mit dem Wert eintragen, den ak_config() liest - ueber
+# bin/ak_vervollstaendigen.php und damit ueber ak_lib.php, den einzigen Schreiber.
+# Hier und nicht nur beim Dienststart: beim Update startet postinstall.sh den Dienst,
+# solange die Marke noch liegt, und waehrend der Marke schreibt die Funktion nichts.
+# Hier ist sie fort (trap in postinstall.sh). Aus / heraus, damit kein Arbeitsordner stoert.
+AK_VV="$BASE/bin/plugins/$PFOLDER/ak_vervollstaendigen.php"
+if command -v php >/dev/null 2>&1 && [ -f "$AK_VV" ] && [ -f "$BASE/config/plugins/$PFOLDER/ankersolix.json" ]; then
+    AK_VV_ZEILE=$( (cd / && LBHOMEDIR="$BASE" php "$AK_VV" "$PFOLDER") 2>&1 | tail -n 1)
+    case "$AK_VV_ZEILE" in
+        *";STAND=ergaenzt;"*)     echo "<OK> Konfiguration vervollstaendigt: ${AK_VV_ZEILE#*SCHLUESSEL=}" ;;
+        *";STAND=vollstaendig;"*) echo "<OK> Konfiguration vollstaendig, nichts ergaenzt." ;;
+        *";STAND=ohne_merkwort;"*|*";STAND=nicht_eingerichtet;"*|*";STAND=ohne_datei;"*)
+            echo "<INFO> Konfiguration nicht vervollstaendigt (noch nicht eingerichtet) - das Speichern in der Oberflaeche schreibt sie vollstaendig." ;;
+        *) echo "<WARNING> Konfiguration nicht vervollstaendigt: ${AK_VV_ZEILE:-keine Ausgabe}. Der Dienst versucht es beim naechsten Start erneut." ;;
+    esac
+fi
+
 # ---------- 2. Die Befehlsbruecke starten (E-E3) ----------
 BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
 if [ -f "$BBSH" ]; then

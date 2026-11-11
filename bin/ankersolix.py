@@ -3125,6 +3125,32 @@ def selbsttest() -> int:
     return 1 if fehler else 0
 
 
+VERVOLLSTAENDIGEN_PHP = "php"     # die Pruefstaende setzen hier eine Attrappe ein
+
+
+def konfiguration_vervollstaendigen() -> str:
+    """Seit 0.9.41 (Regeln/05): fehlende Vorgaben einmal in die Datei schreiben - beim Dienststart.
+
+    Geschrieben wird ueber bin/ak_vervollstaendigen.php und damit ueber ak_lib.php, nicht von hier:
+    ein Schreiber fuer ein Format (Bauart BLE-Scanner 1.3.40). Die Zeile mit den Namen schreibt
+    ak_config_vervollstaendigen() selbst ins Protokoll; hier steht nur eine Zeile, wenn der Aufruf
+    scheiterte - nie ein Wert. Waehrend einer Aktualisierung (Marke) schreibt die PHP-Seite nichts;
+    dann traegt postupgrade.sh nach. Rueckgabe: die Ausgabezeile des Skripts oder "" (fuer die Pruefung)."""
+    skript = Path(__file__).resolve().parent / "ak_vervollstaendigen.php"
+    try:
+        r = subprocess.run([VERVOLLSTAENDIGEN_PHP, str(skript), PNAME], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        _LOG.warning("Konfiguration nicht vervollstaendigt: Aufruf von %s scheiterte (%s)", skript.name,
+                     type(err).__name__)
+        return ""
+    zeilen = (r.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+    zeile = zeilen[-1] if zeilen else ""
+    if r.returncode != 0 or not zeile.startswith("VERVOLLSTAENDIGEN;"):
+        _LOG.warning("Konfiguration nicht vervollstaendigt: Rueckgabe %s, Ausgabe %r", r.returncode, zeile[:200])
+    return zeile
+
+
 def main() -> int:
     # 0.9.38 (K8a): ein unbekannter Schalter (Tippfehler --selbtest) startet nicht den Dauerdienst. Wert nur hinter --abraeumen.
     erlaubt = ("--vorgaben", "--themen", "--selbsttest", "--abraeumen", "--einmal", "--freigeben")
@@ -3160,6 +3186,9 @@ def main() -> int:
     log_einrichten()
     if "--selbsttest" in sys.argv:
         return selbsttest()
+    # 0.9.41 (Regeln/05): fehlende Vorgaben einmal in die Datei - vor dem ersten Lesen in dienst().
+    if "--freigeben" not in sys.argv:
+        konfiguration_vervollstaendigen()
     signal.signal(signal.SIGTERM, signal_behandeln)
     signal.signal(signal.SIGINT, signal_behandeln)
     try:

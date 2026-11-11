@@ -270,9 +270,10 @@ function ak_vorgaben_dienst()
  *
  * $stand: 'ok' | 'fehlt' | 'kaputt'
  */
-function ak_json_lesen($pfad, &$stand = null)
+function ak_json_lesen($pfad, &$stand = null, &$roh_aus = null)
 {
     $stand = 'fehlt';
+    $roh_aus = null;   // seit 11.11.2026: der gelesene Rohtext fuer ak_config_vervollstaendigen()
     if (!is_file($pfad)) {
         return array();
     }
@@ -281,6 +282,7 @@ function ak_json_lesen($pfad, &$stand = null)
         $stand = 'kaputt';
         return array();
     }
+    $roh_aus = $roh;
     if (trim($roh) === '') {
         // Eine leere Datei ist kein Schaden: genau so legt postinstall.sh an.
         return array();
@@ -507,6 +509,107 @@ function ak_config_speichern($cfg)
     // geschrieben und zurueckgelesen gleich ist - das prueft der Helfer.
     ak_json_schreiben($p['sicherung'], $cfg, 0600);
     return true;
+}
+
+/** Leere Objekte des Rohtextes ($o, json_decode ohne true) im Feld $a wieder als Objekt fuehren (11.11.2026),
+ *  damit json_encode() sie als {} und nicht als [] schreibt - oben wie verschachtelt, auch unter fremden
+ *  Schluesseln. Nur fuer ak_config_vervollstaendigen(); das Speichern im Formular bleibt, wie es ist.
+ *  Bauart Bewaesserung 0.9.56 (bw_json_leere_objekte()). */
+function ak_json_leere_objekte($a, $o)
+{
+    if (!is_array($a)) { return $a; }
+    if (is_object($o)) {
+        if (!get_object_vars($o) && $a === array()) { return new stdClass(); }
+        foreach ($a as $k => $v) {
+            $ks = (string) $k;
+            if (is_array($v) && property_exists($o, $ks)) { $a[$k] = ak_json_leere_objekte($v, $o->$ks); }
+        }
+    } elseif (is_array($o)) {
+        foreach ($a as $k => $v) {
+            if (is_array($v) && array_key_exists($k, $o)) { $a[$k] = ak_json_leere_objekte($v, $o[$k]); }
+        }
+    }
+    return $a;
+}
+
+/**
+ * Konfiguration vervollstaendigen (seit 0.9.41, Regeln/05 "Die Konfiguration
+ * wird vervollstaendigt, nicht nur ergaenzt"; Bauform Docker NG 1.3.7).
+ *
+ * Bis 0.9.40 ergaenzten ak_config() und config() im Dienst fehlende
+ * Schluessel bei jedem Lesen nur im Speicher; in ankersolix.json kamen sie
+ * erst mit dem naechsten Speichern in der Oberflaeche. Aufgerufen ueber
+ * bin/ak_vervollstaendigen.php: beim Dienststart (ankersolix.py main(), vor
+ * dem ersten Lesen der Konfiguration) und von postupgrade.sh, denn beim
+ * Update startet postinstall.sh den Dienst, solange die Marke noch liegt.
+ * Weil nur bei FEHLENDEN Schluesseln geschrieben wird, bleibt es bei einem
+ * Schreibvorgang.
+ *
+ * - Nur in der Installation (oder mit ausdruecklich genannter Wurzel), nicht
+ *   waehrend einer Aktualisierung (ak_upgrade_laeuft()), und nur wenn
+ *   ankersolix.json ein lesbares Objekt ist, ein gueltiges Aktionstoken traegt
+ *   (dasselbe Muster wie beim Zurueckspielen einer Sicherung) UND eingerichtet
+ *   ist (ein Schluessel ausser aktionstoken - dasselbe Kriterium wie
+ *   ak_uebergang()). Fehlende, leere oder kaputte Dateien sind Sache der
+ *   Selbstheilung in ak_config().
+ * - Geschrieben werden die WERTE AUS DER DATEI, nicht die von ak_config()
+ *   aufbereiteten; fremde Schluessel bleiben stehen. Nachgetragen werden nur
+ *   Schluessel aus ak_vorgaben() - die schreibt jedes Speichern.
+ * - Fehlende Schluessel bekommen den Wert, den ak_config() liest: erst die
+ *   Lese-Regel ak_uebergang() (mqtt_ein 0, endpunkt_ein 1 fuer eine
+ *   eingerichtete Bestandsdatei), dann die Vorgabe. Mit den Vorgaben einer
+ *   Neuinstallation schaltete das Nachtragen MQTT still ein und den
+ *   HTTP-Lesezweig still ab.
+ * - Geschrieben ueber ak_config_speichern() (0600, Zweitschrift).
+ * - Genau eine Protokollzeile mit den Namen, nie mit Werten.
+ *
+ * Rueckgabe: array('stand' => ruht|ohne_datei|ohne_merkwort|nicht_eingerichtet
+ *                  |vollstaendig|ergaenzt|fehler, 'schluessel' => array(...))
+ */
+function ak_config_vervollstaendigen()
+{
+    $p = ak_paths();
+    if ($p['home'] === '' || ak_upgrade_laeuft()) {
+        return array('stand' => 'ruht', 'schluessel' => array());
+    }
+    clearstatcache(true, $p['config']);
+    if (!is_file($p['config'])) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    }
+    $stand = 'fehlt';
+    $roh = null;
+    $datei = ak_json_lesen($p['config'], $stand, $roh);
+    if ($stand !== 'ok' || !isset($datei['aktionstoken']) || !is_string($datei['aktionstoken'])
+            || !preg_match('/^[A-Za-z0-9]{16,64}\z/', $datei['aktionstoken'])) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    // Ein leeres Objekt der Datei ({}) bliebe nach json_decode(..., true) ein leeres Feld und kaeme beim
+    // Schreiben als [] zurueck - der Rohwert wird erhalten, bevor ergaenzt wird (11.11.2026).
+    $datei = ak_json_leere_objekte($datei, json_decode((string) $roh));
+    if (count($datei) < 2) {
+        return array('stand' => 'nicht_eingerichtet', 'schluessel' => array());
+    }
+    $soll = ak_uebergang($datei) + ak_vorgaben();
+    $fehlend = array();
+    foreach ($soll as $k => $w) {
+        if (!array_key_exists($k, $datei)) {
+            $datei[$k] = $w;
+            $fehlend[] = $k;
+        }
+    }
+    if (!$fehlend) {
+        return array('stand' => 'vollstaendig', 'schluessel' => array());
+    }
+    $ok = ak_config_speichern($datei);
+    $zeile = $ok
+        ? 'INFO Konfiguration vervollstaendigt - ' . count($fehlend)
+          . ' fehlende Vorgaben in ankersolix.json geschrieben: ' . implode(', ', $fehlend)
+        : 'WARNING Konfiguration NICHT vervollstaendigt: ankersolix.json liess sich nicht schreiben ('
+          . count($fehlend) . ' fehlende Schluessel).';
+    if (is_dir(dirname($p['log']))) {
+        @file_put_contents($p['log'], '[' . date('Y-m-d H:i:s') . '] ' . $zeile . "\n", FILE_APPEND | LOCK_EX);
+    }
+    return array('stand' => $ok ? 'ergaenzt' : 'fehler', 'schluessel' => $fehlend);
 }
 
 /**

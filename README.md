@@ -16,6 +16,11 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Neu in 0.9.41
+
+- **Konfiguration wird nach einem Update vervollständigt:** Fehlen in `ankersolix.json` Einstellungen, die eine neuere Fassung mitbringt, werden sie jetzt einmal in die Datei eingetragen – beim Update durch `postupgrade.sh` und bei jedem Start des Dienstes, bevor er die Konfiguration liest (neu: `bin/ak_vervollstaendigen.php`, geschrieben wird über `ak_lib.php`). Das Protokoll `ankersolix.log` nennt die ergänzten Namen, keine Werte. Bisher ergänzten Oberfläche und Dienst fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern in der Oberfläche. Für `mqtt_ein` und `endpunkt_ein` gilt dabei wie bisher die Regel für eingerichtete Bestandsdateien (0 bzw. 1), nicht die Vorgabe einer Neuinstallation: MQTT bleibt aus, wo es aus war, der Lesezweig für Loxone bleibt offen.
+- Geschrieben werden die Werte aus der Datei, wie sie dort stehen, plus die fehlenden Vorgaben; Schlüssel, die das Plugin nicht kennt, bleiben stehen, die Zweitschrift zieht mit. Leere Objekte (`{}`) bleiben dabei leere Objekte, oben wie verschachtelt, und werden nicht zu einer leeren Liste (`[]`). Nicht angefasst werden eine fehlende, leere oder unlesbare Datei, eine ohne gültiges Aktionstoken, eine, die außer dem Aktionstoken noch nichts trägt, und jede Datei, solange eine Aktualisierung läuft. Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, dazu ein echter Lauf des Dienststarts (der Abruf bei Anker durch eine Attrappe ersetzt) und von `postupgrade.sh`; am Gerät ist es noch nicht gemessen.
+
 ## Neu in 0.9.40
 
 - **Ansage-Brücke des Dienstes:** `bin/ak_ansage.php` nimmt eine LoxBerry-Wurzel nur noch an, wenn `config/plugins`, `data/plugins` und `config/system/general.json` vorhanden sind; sonst antwortet es mit `KENNUNG=WURZEL` und Rückgabewert 1.
