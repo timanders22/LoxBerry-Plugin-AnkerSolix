@@ -569,14 +569,13 @@ $ak_rahmen = class_exists('LBWeb', false);
  * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
  * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
 if ($ak_post && isset($_POST['ak_sichern'])) {
-    // Mit lesbarem _-Kopf und den Zugangsdaten aus zugang.json (B9).
-    // X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das
-    // eigene Zurueckspielen nicht, sagt es der Kopf der Datei - mit den
-    // NAMEN, nie den Werten. Geliefert wird trotzdem, vollstaendig.
-    $ak_altw = ak_rueckspiel_altwerte();
-    $ak_js = ak_sicherung_bauen($ak_altw
-        ? sprintf(ak_t('EINST.SICH_ALTWERT_KOPF'), implode(', ', $ak_altw)) : '');
-    if ($ak_js !== false) {
+    /* 0.9.42: Kopf (_hinweis, _plugin, _fassung, _stand), Einstellungen und den Block "zugang" aus
+     * zugang.json baut das gemeinsame Sicherungsmodul (ak_sicherung_daten() -> sicherung_bauen()).
+     * X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das eigene Zurueckspielen
+     * nicht, sagt es der Kopf _warnung - mit den NAMEN, nie den Werten. Geliefert wird trotzdem,
+     * vollstaendig. */
+    $ak_js = sicherung_json(ak_sicherung_daten());
+    if ($ak_js !== '') {
         while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="ankersolix_einstellungen_'
@@ -589,46 +588,49 @@ if ($ak_post && isset($_POST['ak_sichern'])) {
 
 /* ---------------- Einstellungen zurueckspielen ----------------
  *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+ * 0.9.42: den Eingang prueft das gemeinsame Sicherungsmodul (sicherung_eingang(), Modul 1.1.0,
+ * Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich: zuerst der Haken zurueck_ok (ohne
+ * ihn wird nichts gelesen und nichts geaendert), dann is_uploaded_file() (sonst liesse sich jede
+ * Datei des Servers unterschieben) und die Groessengrenze des Moduls; erst danach wird die Datei
+ * gelesen. */
 if ($ak_post && isset($_POST['ak_zurueck'])) {
-    if (!isset($_FILES['ak_sicherung']) || !is_array($_FILES['ak_sicherung'])
-        || !isset($_FILES['ak_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['ak_sicherung']['tmp_name'])) {
-        $ak_fehler[] = ak_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['ak_sicherung']['size'] > 262144) {
-        $ak_fehler[] = ak_t('EINST.SICH_ZU_GROSS');
+    list($ak_roh, $ak_ab) = sicherung_eingang(ak_sicherung_beschreibung(), $_POST, $_FILES, 'ak_sicherung');
+    if ($ak_ab !== null) {
+        $ak_sm = sicherung_meldungen(ak_sicherung_beschreibung(), $ak_ab);
+        foreach ($ak_sm['fehler'] as $ak_x) { $ak_fehler[] = $ak_x; }
     } else {
+        /* 0.9.42: das gemeinsame Sicherungsmodul (sicherung_zurueckspielen(), Beschreibung
+         * ak_sicherung_beschreibung()) liest, prueft, verwirft Unbekanntes mit Namen, laesst leere
+         * Werte den bisherigen stehen und aendert bei einer Beanstandung GAR NICHTS (alle
+         * Beanstandungen, nicht nur die erste). */
         // K22/V1 (seit 0.9.32): der MQTT-Stand vor dem Zurueckspielen - wie beim Speichern im Reiter MQTT.
         $ak_vor = ak_config(false);
         $ak_mqtt_vorher = array((int) !empty($ak_vor['mqtt_ein']), (string) $ak_vor['mqtt_topic']);
-        $ak_sl = ak_sicherung_lesen((string) @file_get_contents($_FILES['ak_sicherung']['tmp_name']));
-        list($ak_neu, $ak_mangel, $ak_n, $ak_zneu) = $ak_sl;
-        // Energie-1 C1: Hinweise (etwa "Sicherung von vor der Schreiber-Wache").
-        $ak_shinweise = isset($ak_sl[4]) && is_array($ak_sl[4]) ? $ak_sl[4] : array();
-        if ($ak_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $ak_fehler[] = ak_t('EINST.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $ak_mangel);
-        } elseif ($ak_zneu !== null && !ak_zugang_speichern(
-                array_key_exists('email', $ak_zneu) ? $ak_zneu['email'] : null,
-                array_key_exists('passwort', $ak_zneu) ? $ak_zneu['passwort'] : null)) {
-            // Erst der Zugang, dann die Konfiguration: scheitert der Zugang,
-            // bleibt auch die Konfiguration unveraendert.
-            $ak_fehler[] = ak_t('EINST.FEHLER_ZUGANG_SPEICHERN');
-        } elseif (ak_config_speichern($ak_neu)) {
-            $ak_meldungen[] = sprintf(ak_t('EINST.SICH_UEBERNOMMEN'), $ak_n);
-            foreach ($ak_shinweise as $ak_sh) {
-                $ak_meldungen[] = $ak_sh;
+        $ak_zugang_vorher = ak_sicherung_zugang_jetzt();
+        $ak_b = ak_sicherung_beschreibung();
+        $ak_b['speichern'] = function ($neu, $jetzt, $r) use (&$ak_fehler) {
+            /* Erst der Zugang, dann die Konfiguration: scheitert der Zugang, bleibt auch die
+             * Konfiguration unveraendert. Ein Feld, das die Datei nicht traegt, bleibt (null). */
+            $zg = isset($r['teile']['zugang']) && is_array($r['teile']['zugang']) ? $r['teile']['zugang'] : null;
+            if ($zg !== null && !ak_zugang_speichern($zg['email'], $zg['passwort'])) {
+                $ak_fehler[] = ak_t('EINST.FEHLER_ZUGANG_SPEICHERN');
+                return false;
             }
-            list($ak_mn, $ak_mf) = ak_nach_mqtt_speichern($ak_mqtt_vorher, $ak_neu);
-            $ak_meldungen = array_merge($ak_meldungen, $ak_mn);
-            $ak_fehler = array_merge($ak_fehler, $ak_mf);
-        } else {
-            $ak_fehler[] = ak_t('EINST.SICH_SCHREIBFEHLER');
-        }
+            return ak_config_speichern($neu);
+        };
+        $ak_b['zweitschrift'] = function () { $p = ak_paths(); return array($p['config'], $p['sicherung']); };
+        $ak_b['nachziehen'] = function ($neu, $jetzt, $r) use (&$ak_fehler, $ak_mqtt_vorher, $ak_zugang_vorher) {
+            list($h, $f) = ak_sicherung_nachziehen($neu, $jetzt, $r, $ak_mqtt_vorher, $ak_zugang_vorher);
+            foreach ($f as $x) { $ak_fehler[] = $x; }
+            return $h;
+        };
+        $ak_b['log'] = function ($z) {
+            ak_wache_log($z, strpos((string) $z, 'Sicherung zurueckgespielt') === 0 ? 'INFO' : 'WARNING');
+        };
+        $ak_r = sicherung_zurueckspielen($ak_b, $ak_roh);
+        $ak_sm = sicherung_meldungen($ak_b, $ak_r);
+        foreach ($ak_sm['fehler'] as $ak_x) { $ak_fehler[] = $ak_x; }
+        foreach ($ak_sm['hinweise'] as $ak_x) { $ak_meldungen[] = $ak_x; }
     }
 }
 
@@ -1172,6 +1174,7 @@ if ($ak_rahmen) {
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="formtoken" value="<?= ak_e($ak_formtoken) ?>">
     <input data-role="none" type="file" name="ak_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(ak_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ak_zurueck" value="1"><?= ak_e(ak_t('EINST.K_ZURUECK')) ?></button>
   </form>
 </div>

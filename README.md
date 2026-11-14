@@ -16,6 +16,20 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Neu in 0.9.42
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen nach der gemeinsamen Vorlage:** Die Knöpfe „Einstellungen sichern“ und „Einstellungen zurückspielen“ arbeiten jetzt mit demselben Sicherungsmodul (1.2.2) wie die übrigen Plugins dieser Reihe.
+  - Die Sicherungsdatei trägt im Kopf das Kennzeichen des Plugins (`_plugin` = `LoxBerry-Plugin-AnkerSolix`) und die Fassung (`_fassung`). Eine Datei eines anderen Plugins und eine Datei ohne Kennzeichen werden als Ganzes abgewiesen. Sicherungen von 0.9.21 bis 0.9.41 werden an ihrem Kopf `_hinweis` erkannt, deutsch wie englisch, und weiter angenommen; die Meldung sagt das. Sicherungen von 0.9.10 bis 0.9.20 hatten keinen Kopf und werden abgewiesen (bis 0.9.41 angenommen).
+  - Die Anker-Zugangsdaten stehen in der Sicherungsdatei jetzt im Block `zugang` (E-Mail, Passwort); bis 0.9.41 standen sie flach oben in der Datei. Ältere Sicherungen werden beim Zurückspielen in diese Form gebracht. Die Zugangsdaten gehen wie bisher in `zugang.json` (Rechte 0600), nicht in die Konfiguration.
+  - Eine Einstellung, die diese Fassung nicht kennt, wird nicht übernommen und mit ihrem Namen gemeldet, nie mit ihrem Wert – oben in der Datei, in den Blöcken der Sprachansagen und im Block `zugang`. Die übrigen Einstellungen werden zurückgespielt. Bisher wies ein unbekannter Name die ganze Datei ab.
+  - Ein leerer Wert in der Sicherung überschreibt keinen bestehenden, auch nicht die E-Mail-Adresse; der bisherige Wert bleibt, und die Meldung nennt den Namen.
+  - Fehlt einer Sicherung eine Einstellung, die ihre Fassung noch nicht kannte, behält diese ihren geltenden Wert, und die Meldung nennt sie – jetzt auch die Sprachansagen, die bisher still den geltenden Wert behielten.
+  - Die Meldung sagt, was mit dem Abrufdienst geschieht: Er liest die Einstellungen in jedem Durchlauf neu und wird nicht neu gestartet. Bringt die Sicherung andere Zugangsdaten oder ein anderes Land, sagt sie dazu, dass der Dienst beides nur beim Start liest und bis zu einem Neustart mit der bisherigen Anmeldung arbeitet. Bisher sagte die Meldung nichts über den Dienst.
+- **Verhalten geändert – Zurückspielen nur mit Haken:** Zwischen dem Feld für die Sicherungsdatei und dem Knopf „Einstellungen zurückspielen“ steht ein Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“, ab Werk aus. Ohne ihn wird die Datei nicht gelesen und nichts geändert, und die Meldung sagt es. Haken, Text und die Prüfung der hochgeladenen Datei (über das Formular gekommen, höchstens 256 KB) kommen aus dem gemeinsamen Sicherungsmodul und sind in allen Plugins dieser Reihe gleich.
+- **Reiter *Einbindung in Loxone* und Hilfe:** Die Texte sagten, das MQTT-Gateway lege die Virtuellen Eingänge in Loxone an. Sie sagen jetzt: die Virtuellen Eingänge in Loxone Config mit genau dem Titel aus der Tabelle anlegen; das Gateway ordnet nur über den Namen zu.
+- Unverändert: Eine Datei mit einem unzulässigen Wert ändert gar nichts, alle Beanstandungen werden genannt. Aktionstoken und Zugangsdaten gehören in die Datei, die Sprechtoken nicht; eine Datei mit Sprechtoken wird abgewiesen. Die Zweitschrift zieht mit; verlassene MQTT-Präfixe werden abgeräumt und die Befehlsbrücke wird geschaltet wie beim Speichern im Reiter MQTT.
+- Am Gerät nicht gemessen. Gemessen wurde mit einem Prüfstand unter PHP 7.4 und 8.4 auf dem Arbeitsrechner, der über einen Webserver die echten Knöpfe drückt, mit den Sicherungen aller 32 Vorfassungen von 0.9.10 bis 0.9.41.
+
 ## Neu in 0.9.41
 
 - **Konfiguration wird nach einem Update vervollständigt:** Fehlen in `ankersolix.json` Einstellungen, die eine neuere Fassung mitbringt, werden sie jetzt einmal in die Datei eingetragen – beim Update durch `postupgrade.sh` und bei jedem Start des Dienstes, bevor er die Konfiguration liest (neu: `bin/ak_vervollstaendigen.php`, geschrieben wird über `ak_lib.php`). Das Protokoll `ankersolix.log` nennt die ergänzten Namen, keine Werte. Bisher ergänzten Oberfläche und Dienst fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern in der Oberfläche. Für `mqtt_ein` und `endpunkt_ein` gilt dabei wie bisher die Regel für eingerichtete Bestandsdateien (0 bzw. 1), nicht die Vorgabe einer Neuinstallation: MQTT bleibt aus, wo es aus war, der Lesezweig für Loxone bleibt offen.
@@ -85,7 +99,7 @@ bestehende Anlagen.
   entfallen danach.
 * **Ohne Aussage -1** bei Zahlen und `-` bei Texten statt gar nichts; fällt `status/ok` auf 0, gehen die
   Messwerte einmal als -1 hinaus. Neu: `anlageN/monat/*` und `anlageN/jahr/*`.
-* **Namenstabelle** im Reiter *Einbindung in Loxone* mit den Namen, die das Gateway in Loxone anlegt
+* **Namenstabelle** im Reiter *Einbindung in Loxone* mit den Titeln der Virtuellen Eingänge (in Loxone Config mit genau diesem Titel anlegen; das Gateway ordnet nur über den Namen zu)
   (`ankersolix_status_ok`, `ankersolix_anlage1_soc` …), Kopierknopf und der Liste der 25 Haken für Gateway V2.
 * **Befehle über MQTT** (Befehlsbrücke 1.0.1): Haken „Befehle über MQTT annehmen“ im Reiter MQTT, ab Werk aus;
   `ankersolix/befehl/hauslast`, `modus`, `reserve`, `einspeisung`, `einspeisegrenze`, `notstromreserve`

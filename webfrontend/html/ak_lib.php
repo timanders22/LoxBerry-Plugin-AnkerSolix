@@ -1,5 +1,9 @@
 <?php
 require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der Sprachansagen schon beim ersten Lesen der Konfiguration
+/* Gemeinsames Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, seit 0.9.42): "Einstellungen
+ * sichern" und "Einstellungen zurueckspielen" verhalten sich in allen Plugins des Hauses gleich. Liegt neben
+ * dieser Datei und schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sicherung.php';
 /**
  * Anker SOLIX - gemeinsame Bibliothek
  *
@@ -4371,48 +4375,6 @@ function ak_ansage_wert($k, $w)
     return false;
 }
 
-/** Fuer die Sicherung: nie ein Sprechtoken, nie der Herkunftsvermerk. Ausgabeart, Ziele, Regeln und Haken reisen mit. */
-function ak_ansage_fuer_sicherung(array $c)
-{
-    unset($c['ansage_token_herkunft'], $c['ansage_aus_datei']);
-    if (isset($c['tts']) && is_array($c['tts'])) { $c['tts'] = ansage_sicherung_bereinigen($c['tts']); }
-    return $c;
-}
-
-/**
- * Vor dem Zurueckspielen. Eine Datei mit Sprechtoken wird abgewiesen (der Block wird unbrauchbar gemacht, die Wertpruefung nennt ihn). Die geltenden Token und der Vermerk bleiben.
- * Fehlt ein Schluessel (Sicherung einer aelteren Fassung), gilt der geltende Wert: Ein bewusstes AUS geht beim Zurueckspielen nicht verloren.
- */
-function ak_ansage_sicherung_vor($roh)
-{
-    $d = json_decode((string) $roh, true);
-    if (!is_array($d)) { return $roh; }
-    $inhalt = false;
-    foreach (array_keys($d) as $k) { if ((string) $k !== '' && ((string) $k)[0] !== '_') { $inhalt = true; } }
-    if (!$inhalt) { return $roh; }
-    $j = ak_ansage_cfg();
-    unset($d['ansage_token_herkunft'], $d['ansage_aus_datei']);
-    $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
-    if (array_key_exists('tts', $d)) {
-        $g = '';
-        $p = is_array($d['tts']) ? ansage_wert_pruefen($d['tts'], $g, ak_ansage_modi()) : null;
-        if (ansage_sicherung_mangel($d['tts']) || $p === null) {
-            $d['tts'] = 'ABGEWIESEN';
-        } else {
-            list($tv) = ansage_vervollstaendigen($p, 'aus');
-            $d['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
-        }
-    } else {
-        $d['tts'] = ak_tts($j);
-    }
-    foreach (array_diff(ak_ansage_schluessel(), array('tts', 'ansage_token_herkunft', 'ansage_aus_datei')) as $k) {
-        if (!array_key_exists($k, $d) && array_key_exists($k, $j)) { $d[$k] = $j[$k]; }
-    }
-    $d['ansage_token_herkunft'] = isset($j['ansage_token_herkunft']) && is_array($j['ansage_token_herkunft']) ? $j['ansage_token_herkunft'] : array();
-    $d['ansage_aus_datei'] = 1;
-    return (string) json_encode($d);
-}
-
 /**
  * Die Hauptkonfiguration. Liegt eine ansage.json aus einer Probe vom 01.11., wird sie EINMAL uebernommen (Vermerk ansage_aus_datei) und bleibt liegen.
  */
@@ -4752,145 +4714,262 @@ function ak_ansage_anlass($anlass)
     return ak_ansage_legen(array($e));
 }
 
-function ak_sicherung_lesen($roh, &$namen = null)
+/**
+ * 0.9.42: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul
+ * (Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn 12.11.2026). Lesen,
+ * Pruefen und Zurueckspielen macht das Modul; bis 0.9.41 stand hier eine eigene
+ * Schleife (ak_sicherung_lesen()): ein unbekannter Schluessel oben wies die ganze
+ * Datei ab, einer in einem Block der Sprachansagen ebenso, und eine Datei ohne
+ * Kennzeichen oder mit dem eines anderen Plugins wurde gelesen wie eine eigene
+ * (gemessen 14.11.2026 an 0.9.41 mit Werkzeuge/sicherung_pruefstand.py --profil
+ * ist, Klasse A).
+ *
+ * Seither: der Kopf traegt _plugin = 'LoxBerry-Plugin-AnkerSolix' (Name des
+ * Repositorys; bis 0.9.41 gab es kein Kennzeichen) und _fassung; eine Datei mit
+ * fremdem Kennzeichen wird abgewiesen, eine ohne nur dann gelesen, wenn sie eine
+ * aeltere eigene Sicherung ist (ak_sicherung_alt_erkennen(), ab 0.9.21);
+ * unbekannte Schluessel oben, in den Bloecken und im Teil "zugang" werden
+ * verworfen und mit Namen gemeldet; ein leerer Wert ueberschreibt keinen
+ * bestehenden, auch nicht die E-Mail-Adresse oder das Passwort.
+ *
+ * Die Zugangsdaten stehen in der Datei seit 0.9.42 im Block "zugang" (email,
+ * passwort); bis 0.9.41 standen sie flach oben. Der Uebersetzer fuer aeltere
+ * Sicherungen legt sie in den Block - sie gehen wie bisher in zugang.json (0600),
+ * nicht in die Konfiguration.
+ *
+ * Wie bisher: jeder Wert geht durch ak_sicherung_wert() (Typ wie in
+ * ak_vorgaben(), Grenzen wie im Formular), die Sprachansagen durch
+ * ak_ansage_wert() (eine Datei mit Sprechtoken wird abgewiesen); hauslast_min
+ * nicht ueber hauslast_max, je Anlage min nicht ueber max gegen den geltenden
+ * Wert, Sperren an ohne erlaubten Schreiber wird abgewiesen; eine halb gueltige
+ * Datei aendert nichts, alle Beanstandungen werden gesammelt; was eine fruehere
+ * Fassung nicht kannte (ak_sicherung_spaete_schluessel()), behaelt den geltenden
+ * Wert; die Vermerke ansage_token_herkunft und ansage_aus_datei kommen nie aus
+ * einer Datei.
+ */
+function ak_sicherung_beschreibung()
 {
-    $roh = ak_ansage_sicherung_vor($roh);     // 0.9.35: Token und Vermerk bleiben die geltenden
+    $p = ak_paths();
+    $tts = array_merge(array_keys(ansage_werk_block()), ansage_geheim());
+    $av = ak_ansage_vorgaben();
+    $schluessel = array(
+        'tts' => sicherung_block($tts, array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))
+                                                        + array('fehlt' => 'behalten')))
+                 + array(
+                     'sichern' => 'ansage_sicherung_bereinigen',
+                     'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+                         /* 0.9.35: eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei eines,
+                          * wird sie abgewiesen. Gemessen am Block der DATEI, denn Regel 3 des Moduls setzt ein leeres
+                          * Feld vorher auf den geltenden Wert. */
+                         if (ansage_sicherung_mangel($roh) || ak_ansage_wert('tts', ansage_sicherung_bereinigen($w)) !== true) {
+                             return 'tts: ' . ak_t('ANSAGEPLUGIN.M_FEHL');
+                         }
+                         return '';
+                     },
+                     'wandeln' => function ($w) {
+                         $g = '';
+                         return ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, ak_ansage_modi());
+                     }),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())),
+        'ansage_haken' => sicherung_block(array_keys($av['ansage_haken'])),
+        /* je Anlagennummer (1-99) min und max: dynamische Namen, die Pruefung der Linie entscheidet */
+        'anlagen_grenzen' => sicherung_offen(),
+        'zugang' => sicherung_block(array('email', 'passwort')),
+    );
+    foreach (ak_sicherung_spaete_schluessel() as $s) {
+        if (!isset($schluessel[$s])) { $schluessel[$s] = array(); }
+        $schluessel[$s]['fehlt'] = 'behalten';
+    }
+    $fassung = '';
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'pluginversion')) {
+        $fassung = (string) LBSystem::pluginversion($p['plugin']);
+    }
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-AnkerSolix',
+        /* Der Kopftext wie bis 0.9.41: ak_sicherung_alt_erkennen() erkennt aeltere Sicherungen an seinem Anfang. */
+        'hinweis' => sprintf(ak_t('EINST.SICH_KOPF'), $p['plugin'], $fassung !== '' ? $fassung : '?', date('Y-m-d H:i:s')),
+        /* _fassung kommt aus der Plugin-Datenbank bzw. plugin.cfg - keine fuenfte Stelle neben den vier, die
+         * Werkzeuge/fassung_setzen.py pflegt. */
+        'home' => (string) $p['home'], 'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => ak_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft', 'ansage_aus_datei'),
+        'teile' => array('zugang' => 'ak_sicherung_zugang_lesen'),
+        'teile_jetzt' => array('zugang' => 'ak_sicherung_zugang_jetzt'),
+        'pruefen' => function ($k, $w) {
+            $f = ak_sicherung_wert($k, $w);
+            return $f === '' ? '' : ak_e($k) . ': ' . $f;
+        },
+        'quer' => 'ak_sicherung_quer',
+        'uebersetzer' => 'ak_sicherung_alt_erkennen',
+        'vorbereiten' => 'ak_sicherung_vorbereiten',
+        'jetzt' => 'ak_ansage_cfg',
+        't' => 'ak_t',
+        'e' => 'ak_e',
+    );
+}
+
+/**
+ * 0.9.42: Die Schluessel, die eine aeltere Sicherung dieser Linie noch nicht
+ * kennen konnte. Fehlen sie, behalten sie den geltenden Wert, und die Meldung
+ * nennt sie (Regeln/05 Punkt 6): die von ak_sicherung_spaeter() (Schreiber-Wache
+ * seit 0.9.28, endpunkt_ein, befehle_mqtt_ein und strompreis_ein seit 0.9.32,
+ * wie bisher) und die Sprachansagen (bis 0.9.41 setzte ak_ansage_sicherung_vor()
+ * sie still auf den geltenden Wert).
+ */
+function ak_sicherung_spaete_schluessel()
+{
+    return array_merge(ak_sicherung_spaeter(), array('tts', 'ansage_regeln', 'ansage_haken'));
+}
+
+/**
+ * 0.9.42: Eine Sicherung dieser Linie aus der Zeit vor dem Kennzeichen _plugin
+ * (0.9.21 bis 0.9.41) traegt den lesbaren Kopf _hinweis aus EINST.SICH_KOPF, den
+ * nur der Sichern-Knopf dieser Linie schreibt - je nach Sprache der Oberflaeche
+ * deutsch oder englisch. Gemessen 14.11.2026 an allen Fassungen 0.9.10 bis 0.9.41
+ * (Ordner und Archive): ab 0.9.21 je Sprache ein Wortlaut, er beginnt mit
+ * "Sicherung des LoxBerry-Plugins Anker SOLIX (Ordner " bzw. "Backup of the
+ * LoxBerry plugin Anker SOLIX (folder ". Daran wird sie erkannt. 0.9.10 bis 0.9.20
+ * schrieben keinen Kopf; eine solche Datei ist nicht sicher von einer fremden zu
+ * unterscheiden und wird abgewiesen (Entscheidung des Hausherrn 12.11.2026).
+ * Die flach gesicherten Zugangsdaten (email, passwort) kommen in den Block
+ * "zugang", wie ihn diese Fassung schreibt. Rueckgabe: die Daten oder null.
+ */
+function ak_sicherung_alt_erkennen($d)
+{
+    if (!is_array($d) || !isset($d['_hinweis']) || !is_string($d['_hinweis'])) { return null; }
+    $eigen = false;
+    foreach (array('Sicherung des LoxBerry-Plugins Anker SOLIX (Ordner ', 'Backup of the LoxBerry plugin Anker SOLIX (folder ') as $a) {
+        if (strpos($d['_hinweis'], $a) === 0) { $eigen = true; }
+    }
+    if (!$eigen) { return null; }
+    if (!array_key_exists('zugang', $d)) {
+        $z = array();
+        foreach (array('email', 'passwort') as $f) {
+            if (array_key_exists($f, $d)) { $z[$f] = $d[$f]; unset($d[$f]); }
+        }
+        if ($z) { $d['zugang'] = $z; }
+    }
+    return $d;
+}
+
+/** 0.9.42: Die Zugangsdaten, wie sie in zugang.json stehen - fuer die Sicherung und Regel 3 (leer bleibt). */
+function ak_sicherung_zugang_jetzt()
+{
+    $z = ak_json_lesen(ak_paths()['zugang']);
+    return array('email' => isset($z['email']) ? (string) $z['email'] : '',
+                 'passwort' => isset($z['passwort']) ? (string) $z['passwort'] : '');
+}
+
+/**
+ * 0.9.42: Der Teil "zugang" einer Sicherung. Er gehoert NICHT in die
+ * Konfiguration, sondern in zugang.json (0600). Geprueft wie bis 0.9.41: eine
+ * Zeichenkette je Feld, die E-Mail-Adresse leer oder gueltig. Ein Feld, das die
+ * Datei nicht traegt, bleibt unberuehrt (null). Rueckgabe fuer das
+ * Sicherungsmodul: array(Zugangsdaten|null, Beanstandungen[]).
+ */
+function ak_sicherung_zugang_lesen($w)
+{
+    if (!is_array($w)) {
+        return array(null, array('zugang: ' . ak_t('EINST.SICH_TEXT')));
+    }
     $mangel = array();
-    // Hinweise, die das Zurueckspielen nicht verhindern (Energie-1 C1: Sicherung
-    // von vor der Schreiber-Wache). Fuenftes Element der Rueckgabe.
-    $hinweise = array();
-    // X-3 (Verbesserungsbau 30.09.2026): die Namen der beanstandeten
-    // Schluessel, nie ihre Werte.
-    $namen = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        return array(null, array(ak_t('EINST.SICH_KEIN_JSON')), 0, null);
+    $aus = array('email' => null, 'passwort' => null);
+    foreach (array('email', 'passwort') as $k) {
+        if (!array_key_exists($k, $w)) { continue; }
+        if (!is_string($w[$k])) {
+            $mangel[] = ak_e($k) . ': ' . ak_t('EINST.SICH_TEXT');
+        } elseif ($k === 'email' && $w[$k] !== '' && filter_var($w[$k], FILTER_VALIDATE_EMAIL) === false) {
+            $mangel[] = ak_e($k) . ': ' . ak_t('EINST.FEHLER_EMAIL');
+        } else {
+            $aus[$k] = $w[$k];
+        }
     }
-    $neu = ak_vorgaben();
-    $bekannt = array_keys($neu);
-    $zugang = array();
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        $k = (string) $k;
-        // Der lesbare Kopf (_hinweis ...) wird ueberlesen.
-        if ($k !== '' && $k[0] === '_') {
-            continue;
-        }
-        // Zugangsdaten gehoeren in zugang.json, nicht in die Konfiguration.
-        if ($k === 'email' || $k === 'passwort') {
-            $f = !is_string($w) ? ak_t('EINST.SICH_TEXT')
-                : (($k === 'email' && $w !== '' && filter_var($w, FILTER_VALIDATE_EMAIL) === false)
-                    ? ak_t('EINST.FEHLER_EMAIL') : '');
-            if ($f !== '') {
-                $mangel[] = ak_e($k) . ': ' . $f;
-                $namen[] = $k;
-            } else {
-                $zugang[$k] = $w;
-                $anzahl++;
-            }
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(ak_t('EINST.SICH_FREMD'), ak_e($k));
-            $namen[] = $k;
-            continue;
-        }
-        // Jeder Wert wird geprueft (Befund Oberflaeche 4) - gesammelt, nicht
-        // der erste; eine halb gueltige Datei aendert nichts.
-        $f = ak_sicherung_wert($k, $w);
-        if ($f !== '') {
-            $mangel[] = ak_e($k) . ': ' . $f;
-            $namen[] = $k;
-            continue;
-        }
-        $neu[$k] = $w;
-        $anzahl++;
-    }
-    if ($anzahl === 0) {
-        $mangel[] = ak_t('EINST.SICH_LEER');
-    }
-    // Wie das Formular: kleinste nicht ueber groesster - nur wenn beide
-    // Werte aus der Datei angenommen wurden.
+    return $mangel ? array(null, $mangel) : array($aus, array());
+}
+
+/**
+ * Was nur im ZUSAMMENSPIEL falsch sein kann (wie bis 0.9.41). Rueckgabe fuer das
+ * Sicherungsmodul: Liste von array(Name, Text). $daten: die Datei vor Regel 2 und 3.
+ *  - kleinste Hauslast nicht ueber der groessten - nur wenn beide Werte aus der
+ *    Datei angenommen wurden;
+ *  - K3/K14 (seit 0.9.32): je Anlage min nicht ueber max - gegen den GELTENDEN Wert
+ *    (ein leeres Feld gilt mit der allgemeinen Grenze dieser Datei);
+ *  - Energie-1 C1: Sperren an ohne erlaubten Schreiber.
+ */
+function ak_sicherung_quer($neu, $r, $daten)
+{
+    $aus = array();
+    $bean = array();
+    foreach ($r['beanstandet'] as $x) { $bean[] = $x['name']; }
     if (isset($daten['hauslast_min'], $daten['hauslast_max'])
-        && $neu['hauslast_min'] === $daten['hauslast_min']
-        && $neu['hauslast_max'] === $daten['hauslast_max']
+        && !in_array('hauslast_min', $bean, true) && !in_array('hauslast_max', $bean, true)
         && $neu['hauslast_min'] > $neu['hauslast_max']) {
-        $mangel[] = ak_t('EINST.FEHLER_HAUSLAST_TAUSCH');
-        $namen[] = 'hauslast_min';
-        $namen[] = 'hauslast_max';
+        $aus[] = array('hauslast_min', ak_t('EINST.FEHLER_HAUSLAST_TAUSCH'));
     }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
-     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
-     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
-     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen".
-     *
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
-     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
-     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
-     * Bestand ausgerollt (30 Linien).
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
-     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
-     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
-    $fehlend = array();
-    $ak_wb = array();
-    foreach (array_keys(ak_vorgaben()) as $fk) {
-        if (!array_key_exists($fk, $daten)) {
-            /* Eine Sicherung von VOR einer Fassung kennt deren Einstellungen nicht: die Schreiber-Wache
-             * (Energie-1 C1, 0.9.28) und seit 0.9.32 endpunkt_ein, befehle_mqtt_ein, strompreis_ein
-             * (E-E13, ak_sicherung_spaeter()). Sie ist trotzdem vollstaendig; die GELTENDEN Werte bleiben,
-             * und die Seite sagt es. Ohne diese Ausnahme waere keine 0.9.31-Sicherung zurueckspielbar. */
-            if (in_array($fk, ak_sicherung_spaeter(), true)) {
-                $ak_wb[] = $fk;
-                continue;
-            }
-            $fehlend[] = $fk;
-        }
-    }
-    if ($ak_wb) {
-        $ak_wj = ak_config(false);
-        foreach ($ak_wb as $fk) {
-            $neu[$fk] = $ak_wj[$fk];
-        }
-        $hinweise[] = sprintf(ak_t('EINST.SICH_SPAETER'), ak_e(implode(', ', $ak_wb)));
-    }
-    /* K3/K14 (seit 0.9.32): je Anlage min nicht ueber max - gegen den GELTENDEN Wert (ein leeres Feld gilt mit
-     * der allgemeinen Grenze dieser Datei). Bis 0.9.31 wurde nur bei zwei gefuellten Feldern verglichen: min
-     * 3000 bei allgemein max 1600 sperrte jede Hauslast der Anlage. */
-    if (isset($daten['anlagen_grenzen']) && !in_array('anlagen_grenzen', $namen, true)
+    if (isset($daten['anlagen_grenzen']) && !in_array('anlagen_grenzen', $bean, true)
         && is_array($neu['anlagen_grenzen'])) {
-        foreach ($neu['anlagen_grenzen'] as $ak_gnr => $ak_gg) {
-            $ak_glo = ((string) $ak_gg['min'] === '') ? (int) $neu['hauslast_min'] : (int) $ak_gg['min'];
-            $ak_ghi = ((string) $ak_gg['max'] === '') ? (int) $neu['hauslast_max'] : (int) $ak_gg['max'];
-            if ($ak_glo > $ak_ghi) {
-                $mangel[] = sprintf(ak_t('EINST.FEHLER_GRENZE_TAUSCH'), ak_e($ak_gnr));
-                $namen[] = 'anlagen_grenzen';
+        foreach ($neu['anlagen_grenzen'] as $nr => $g) {
+            $lo = ((string) $g['min'] === '') ? (int) $neu['hauslast_min'] : (int) $g['min'];
+            $hi = ((string) $g['max'] === '') ? (int) $neu['hauslast_max'] : (int) $g['max'];
+            if ($lo > $hi) {
+                $aus[] = array('anlagen_grenzen', sprintf(ak_t('EINST.FEHLER_GRENZE_TAUSCH'), ak_e($nr)));
                 break;
             }
         }
     }
-    if ($fehlend) {
-        $namen = array_merge($namen, $fehlend);
-        $mangel[] = sprintf(ak_t('EINST.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+    if (ak_wache_kreuz($neu) && !in_array('wache_sperren_ein', $bean, true) && !in_array('wache_erlaubt', $bean, true)) {
+        $aus[] = array('wache_sperren_ein', ak_t('EINST.SICH_WACHE_KREUZ'));
     }
-    /* Energie-1 C1: Sperren an ohne erlaubten Schreiber - dieselbe Kreuzpruefung wie
-     * das Formular (ak_wache_kreuz). Nur, wenn beide Werte nicht schon einzeln
-     * beanstandet sind. */
-    if (ak_wache_kreuz($neu) && !in_array('wache_sperren_ein', $namen, true)
-        && !in_array('wache_erlaubt', $namen, true)) {
-        $mangel[] = ak_t('EINST.SICH_WACHE_KREUZ');
-        $namen[] = 'wache_sperren_ein';
-        $namen[] = 'wache_erlaubt';
+    return $aus;
+}
+
+/**
+ * 0.9.42: Vor dem Speichern (Rueckruf 'vorbereiten' des Moduls). Der Block tts
+ * wird wie bis 0.9.41 vervollstaendigt, und die geltenden Sprechtoken bleiben
+ * (die Sicherung traegt keine). Kam der Block nicht aus der Datei, steht dort
+ * schon der geltende. Die Vermerke ansage_token_herkunft und ansage_aus_datei
+ * behalten ihren geltenden Wert ('nie_aus_datei', Modul 1.2.1); der geltende
+ * Stand kommt aus ak_ansage_cfg() ('jetzt'), die eine liegengebliebene
+ * ansage.json aus der Probe vom 01.11. vorher einmal uebernimmt.
+ */
+function ak_sicherung_vorbereiten($neu, $jetzt, $r)
+{
+    if (!in_array('tts', $r['fehlt_behalten'], true) && isset($neu['tts']) && is_array($neu['tts'])) {
+        $jt = (is_array($jetzt) && isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : array();
+        list($tv) = ansage_vervollstaendigen($neu['tts'], 'aus');
+        $neu['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
     }
-    // Rueckgabe: array(Konfiguration|null, Beanstandungen, Anzahl,
-    // Zugangsdaten|null, Hinweise). email/passwort duerfen fehlen (aeltere Sicherung).
-    return array($mangel ? null : $neu, $mangel, $anzahl, ($mangel || !$zugang) ? null : $zugang,
-                 $mangel ? array() : $hinweise);
+    return $neu;
+}
+
+/**
+ * 0.9.42: Nach dem Zurueckspielen nachziehen und sagen, was mit dem Dienst
+ * geschah (Regeln/05). Rueckgabe array(Hinweise, Fehler), fertig maskiert.
+ *  - MQTT: wie beim Speichern im Reiter MQTT (K22/V1, seit 0.9.32) -
+ *    verlassene Praefixe abraeumen, Befehlsbruecke schalten.
+ *  - Der Abrufdienst (bin/ankersolix.py) liest die Einstellungen in jedem
+ *    Durchlauf neu; die Zugangsdaten und das Land aber nur beim Start. Er wird
+ *    NICHT neu gestartet (Regeln/04: nichts ungefragt umbauen); bringt die
+ *    Sicherung andere Zugangsdaten oder ein anderes Land, sagt der Hinweis, dass
+ *    er bis zum Neustart mit der bisherigen Anmeldung arbeitet.
+ */
+function ak_sicherung_nachziehen($neu, $jetzt, $r, $mqtt_vorher, $zugang_vorher)
+{
+    list($h, $f) = ak_nach_mqtt_speichern($mqtt_vorher, $neu);
+    if (ak_dienst_pid() <= 0) {
+        $h[] = ak_t('EINST.SICH_DIENST_AUS');
+        return array($h, $f);
+    }
+    $h[] = ak_t('EINST.SICH_DIENST_TAKT');
+    $z = ak_sicherung_zugang_jetzt();
+    $anders = $z !== $zugang_vorher
+        || (is_array($jetzt) && isset($jetzt['land']) && (string) $jetzt['land'] !== (string) $neu['land']);
+    if ($anders) {
+        $h[] = ak_t('EINST.SICH_DIENST_ZUGANG');
+    }
+    return array($h, $f);
 }
 
 /**
@@ -4944,7 +5023,7 @@ function ak_sicherung_grenzen_gueltig($w)
      * genau min und max, jedes '' oder eine ganze Zahl 0..5000 (als Zeichenkette
      * wie aus dem Formular, oder als Zahl). Seit 0.9.32 (K3/K14) die Obergrenze
      * aus ak_zahlgrenzen() statt 9999; die Kreuzpruefung min <= max gegen den
-     * GELTENDEN Wert (leeres Feld = allgemeiner Wert) macht ak_sicherung_lesen(),
+     * GELTENDEN Wert (leeres Feld = allgemeiner Wert) macht ak_sicherung_quer(),
      * die die allgemeinen Grenzen der Datei kennt. */
     if (!is_array($w)) {
         return false;
@@ -4976,55 +5055,32 @@ function ak_sicherung_grenzen_gueltig($w)
 }
 
 /**
- * Die Sicherungsdatei bauen: lesbarer Kopf, alle Einstellungen, dazu E-Mail
- * und Passwort aus zugang.json (Hausstandard: die Datei traegt alle
- * Zugangsdaten; Befund Oberflaeche 3). Die Fassung fragt LoxBerry nach dem
- * Ordnernamen (pluginversion(<ordner>)); ohne LoxBerry steht '?'.
+ * Die Sicherung als Feld: lesbarer Kopf (_hinweis, _plugin, _fassung, _stand,
+ * bei Bedarf _warnung), alle Einstellungen und im Block "zugang" E-Mail und
+ * Passwort aus zugang.json (Hausstandard: die Datei traegt alle Zugangsdaten;
+ * Befund Oberflaeche 3). Seit 0.9.42 gebaut vom gemeinsamen Sicherungsmodul
+ * (sicherung_bauen()); nie ein Sprechtoken, nie die Vermerke (0.9.35). X-3: wuerde
+ * das eigene Zurueckspielen die Datei abweisen, nennt _warnung die Namen, nie
+ * Werte; geliefert wird sie trotzdem.
  */
-function ak_sicherung_bauen($warnung = '')
+function ak_sicherung_daten()
 {
-    $p = ak_paths();
-    $fassung = '';
-    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'pluginversion')) {
-        $fassung = (string) LBSystem::pluginversion($p['plugin']);
-    }
-    $z = ak_json_lesen($p['zugang']);
-    $kopf = array('_hinweis' => sprintf(ak_t('EINST.SICH_KOPF'), $p['plugin'],
-        $fassung !== '' ? $fassung : '?', date('Y-m-d H:i:s')));
-    // X-3: bestuende die Datei das eigene Zurueckspielen nicht, sagt es der
-    // Kopf - mit den Namen, nie den Werten (ak_rueckspiel_altwerte()).
-    if ((string) $warnung !== '') {
-        $kopf['_warnung'] = (string) $warnung;
-    }
-    $zugang = array(
-        'email'    => isset($z['email']) ? (string) $z['email'] : '',
-        'passwort' => isset($z['passwort']) ? (string) $z['passwort'] : '',
-    );
-    return json_encode($kopf + ak_ansage_fuer_sicherung(ak_config()) + $zugang,     // 0.9.35: nie ein Sprechtoken
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $z = ak_sicherung_zugang_jetzt();
+    return sicherung_bauen(ak_sicherung_beschreibung(), ak_config(), array('zugang' => $z));
 }
 
 /**
  * X-3 (Verbesserungsbau 30.09.2026): Welche gespeicherten Werte bestuenden
- * das eigene Zurueckspielen nicht? Die Sicherung wird gebaut und durch
- * ak_sicherung_lesen() geschickt - dieselbe Pruefung wie beim Zurueckspielen.
- * Rueckgabe: Liste der NAMEN, nie der Werte; leer = die Sicherung liesse sich
- * zurueckspielen (oder liess sich gar nicht bauen - das meldet der Knopf).
- * Der Name traegt bewusst kein "sicherung": Werkzeuge/sicherung_pruefen.py
- * nimmt die erste Funktion *_sicherung* mit json_encode fuer die Ausfuhr.
+ * das eigene Zurueckspielen nicht? Seit 0.9.42 dieselbe Pruefung wie beim
+ * Zurueckspielen ueber das Sicherungsmodul (sicherung_selbstpruefung()) an genau
+ * der Datei, die "Einstellungen sichern" liefert. Rueckgabe: Liste der NAMEN,
+ * nie der Werte; leer = die Sicherung liesse sich zurueckspielen.
  */
 function ak_rueckspiel_altwerte()
 {
-    $roh = ak_sicherung_bauen();
-    if (!is_string($roh)) {
-        return array();
-    }
-    $namen = array();
-    list($neu) = ak_sicherung_lesen($roh, $namen);
-    if ($neu !== null) {
-        return array();
-    }
-    return $namen ? array_values(array_unique($namen)) : array('?');
+    $d = ak_sicherung_daten();
+    unset($d['_warnung']);
+    return sicherung_selbstpruefung(ak_sicherung_beschreibung(), $d, ak_ansage_cfg());
 }
 
 /* ---------------- Einmalmeldung nach dem POST (B11) ----------------
