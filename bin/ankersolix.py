@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uhrabgleich  # gemeinsames Uhrmodul (Frage 95), Abschrift bin/uhrabgleich.py
 import logging
 import os
 import re
@@ -2762,7 +2763,8 @@ async def _dienst_lauf(einmal: bool, freigeben: bool, frist, z: dict, leser) -> 
     from aiohttp import ClientSession
     from api.api import AnkerSolixApi
     cfg = config()
-    async with ClientSession(timeout=frist) as sitzung:
+    _uhr_spur = uhrabgleich.uhr_aiohttp_spur(str(PDATA))  # Uhrmodul (Frage 95), nur lesend
+    async with ClientSession(timeout=frist, trace_configs=[_uhr_spur] if _uhr_spur is not None else None) as sitzung:
         api = AnkerSolixApi(z["email"], z["passwort"], cfg["land"], sitzung, _LOG)
         drosselung_setzen(api, cfg)
 

@@ -442,6 +442,13 @@ function ak_pruefungen()
     list($stand, $text) = ak_bausteinnamen_probe();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_BAUSTEINNAMEN'), $text);
 
+    /* Gemeinsames Uhrmodul (Frage 95): Systemuhr gegen die Kopfzeile Date der Cloud - nur melden. */
+    list($uhr_s, $uhr_t) = uhr_pruefzeile(array('ordner' => $p['datadir'], 'dienst' => 'Anker', 't' => 'ak_t'));
+    $uhr_z = ak_pruefzeile($uhr_s === 1 ? 1 : -1, htmlspecialchars(uhr_frage(array('t' => 'ak_t')), ENT_QUOTES, 'UTF-8'),
+        htmlspecialchars($uhr_t, ENT_QUOTES, 'UTF-8'));
+    $uhr_z['uhr'] = $uhr_s;
+    $zeilen[] = $uhr_z;
+
     return $zeilen;
 }
 

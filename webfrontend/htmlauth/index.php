@@ -1749,7 +1749,8 @@ foreach ($ak_nt as $ak_ne) {
 <?php } ?>
 <?php foreach ($ak_test_offen ? ak_pruefungen() : array() as $ak_z) { ?>
 <tr><td style="text-align:center;"><?php
-    if ($ak_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
+    if (isset($ak_z['uhr'])) { echo uhr_zeichen($ak_z['uhr']); }
+    elseif ($ak_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
     elseif ($ak_z['stand'] === 0) { echo '<span class="sm-aus">&#10008;</span>'; }
     else { echo '<span style="color:#888;">&#9679;</span>'; }
 ?></td><td><?= $ak_z['frage'] ?></td><td><?= $ak_z['antwort'] ?></td></tr>

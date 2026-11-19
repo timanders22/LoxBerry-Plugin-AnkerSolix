@@ -4,6 +4,7 @@ require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der
  * sichern" und "Einstellungen zurueckspielen" verhalten sich in allen Plugins des Hauses gleich. Liegt neben
  * dieser Datei und schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/uhrabgleich.php';   // gemeinsames Uhrmodul (Frage 95), Abschrift von Werkzeuge/gemeinsam/uhrabgleich.php
 /**
  * Anker SOLIX - gemeinsame Bibliothek
  *
