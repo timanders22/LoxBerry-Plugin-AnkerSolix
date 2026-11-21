@@ -16,6 +16,10 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Neu in 0.9.47
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung, einheitlich in allen Plugins.
+
 ## Neu in 0.9.46
 
 - **Neu – Prüfzeile „Ist die Systemuhr synchron?“ (gemeinsames Uhrmodul):** Der Reiter „Test“ vergleicht die Systemuhr des LoxBerry mit der Kopfzeile Date der Antworten von der Anker-Cloud und meldet nur: Haken bis 30 s Abweichung, gelber Punkt darüber, ohne Messung „nicht feststellbar“. `timedatectl` steht nur als Hinweis dabei. Die letzte Abweichung liegt in `data/plugins/ankersolix/uhr.json`; dafür liest das Plugin bei den Anfragen der Sitzung des Dienstes (aiohttp) die Kopfzeile Date mit, am Abruf selbst ändert sich nichts. Ob eine falsche Uhr die Anmeldung bricht, ist nicht gemessen. Gemessen auf dem Arbeitsrechner: Selbsttest des Moduls unter PHP 7.4, 8.4 und 8.5 und mit Python, Kreuzprobe PHP/Python, Syntax aller geänderten Dateien; der Weg über aiohttp gegen einen Gegenserver in WSL (aiohttp 3.14.5); die Messung gegen die echte Cloud und am Gerät ist nicht gemessen.

@@ -69,7 +69,8 @@ if (ak_upgrade_laeuft()) {
     $ak_rahmen = class_exists('LBWeb', false);
     if ($ak_rahmen) {
         // K7 (seit 0.9.32): die eigene Wikiseite statt der Startseite des Wikis.
-        LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/plugins/ankersolix/start', 'help.html');
+        require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+        LBWeb::lbheader(plugin_kopftitel('Anker SOLIX', __DIR__), 'https://wiki.loxberry.de/plugins/ankersolix/start', 'help.html');
     }
     echo '<div style="max-width:980px;margin:0 auto;'
        . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
@@ -652,7 +653,8 @@ if ($ak_post_roh && ak_einmal_schreiben($ak_meldungen, $ak_fehler, $ak_testausga
 }
 
 if ($ak_rahmen) {
-    LBWeb::lbheader('Anker SOLIX', 'https://wiki.loxberry.de/plugins/ankersolix/start', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('Anker SOLIX', __DIR__), 'https://wiki.loxberry.de/plugins/ankersolix/start', 'help.html');
 }
 
 ?>
