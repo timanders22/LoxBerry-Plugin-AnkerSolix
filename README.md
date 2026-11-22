@@ -16,6 +16,12 @@ System X1.
 > Einspeisegrenze, Notstromreserve und die Begrenzung des Wechselrichters. Sie
 > greifen über `set_station_parm` beziehungsweise `set_device_pv_power` ein.
 
+## Neu in 0.9.48
+
+- Gemeinsames Sprachmodul 1.5.0 (Entscheidung des Hausherrn 22.11.2026): Die Nachtruhe der Ansagen kann an Nicht-Schultagen (Samstag, Sonntag, Feiertage, Ferien) später enden. Neues Feld „Nachtruhe an Nicht-Schultagen bis“ bei „Wann gesprochen wird“, ab Werk leer: Dann gilt die Zeit, die im Plugin Ferien und Feiertage eingestellt ist (MQTT-Thema `haus/ansage/nachtruhe_frei_bis`); ohne sie endet die Nachtruhe wie an Schultagen. Ob heute ein Schultag ist, sagt `haus/kalender/heute/frei` (nur bei `haus/kalender/datum` = heute); ohne diese Aussage zählen nur Samstag und Sonntag. Dringende Ansagen übergehen die Nachtruhe wie bisher. Ohne Vorgabe und ohne eigene Zeit ändert sich nichts.
+- Reiter Test: neue Zeile zum Ende der Nachtruhe an Nicht-Schultagen (Quelle der Zeit, Art des heutigen Tages).
+- Meldung bei abgewiesener Anmeldung (wie Skoda Connect NG 0.9.53 und BYD-Autos 0.9.48): Statt bestimmt „Benutzername oder Passwort stimmen nicht“ nennt das Plugin jetzt den Text des Fehlers (Antwort 401/40200 der Anker-Cloud; E-Mail-Adressen unkenntlich, der Teil einer Adresse hinter `?` oder `#` entfernt, eine Zeile, höchstens 200 Zeichen) und das Passwort des Anker-Kontos als einen möglichen Grund unter mehreren. Ob die Anmeldung an den Zugangsdaten oder an einer Änderung bei Anker scheitert, lässt sich aus dem Fehler allein nicht unterscheiden. Wann die Bibliothek diesen Fehler wirft, ist nicht gemessen.
+
 ## Neu in 0.9.47
 
 - Die Kopfzeile zeigt jetzt die installierte Fassung, einheitlich in allen Plugins.

@@ -1952,6 +1952,14 @@ def zaehler_fortschreiben(datei: Path, zeilen: dict, grenze: str) -> dict:
 # (erreichbar, aber nichts lauscht) bedeutet etwas voellig anderes als ein
 # Zeitueberlauf (nichts antwortet) oder EHOSTUNREACH (kein Weg dorthin).
 # ---------------------------------------------------------------------------
+def fehler_ausschnitt(text: str) -> str:
+    """Text einer Ausnahme fuer Protokoll und Status: E-Mail-Adressen werden x@x, alles hinter ? oder # einer Adresse
+    faellt weg, eine Zeile, hoechstens 200 Zeichen (wie BYD-Autos 0.9.48, Skoda-Connect-NG 0.9.53)."""
+    t = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "x@x", str(text))
+    t = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://[^\s?#'\"]*)[?#][^\s'\"]*", r"\1?...", t)
+    return " ".join(t.split())[:200]
+
+
 def fehlertext(err: Exception) -> str:
     name = type(err).__name__
     text = str(err) or name
@@ -1974,8 +1982,10 @@ def fehlertext(err: Exception) -> str:
     if ("401" in text or "40200" in text
             or "password" in kleine and "wrong" in kleine
             or "invalid" in kleine and ("credential" in kleine or "password" in kleine)):
-        return ("Anmeldung abgewiesen: Anker-Benutzername, Passwort oder Land stimmen nicht. "
-                "Land ist das Zweibuchstabenkuerzel des Kontos, nicht die Sprache.")
+        return ("Die Anker-Cloud hat die Anmeldung oder Anfrage abgewiesen (%s). Moegliche Gruende: "
+                "Benutzername, Passwort oder Land des Anker-Kontos (Land ist das Zweibuchstabenkuerzel "
+                "des Kontos, nicht die Sprache) oder eine abgelaufene Anmeldung. Aus dem Code allein "
+                "laesst sich das nicht sicher unterscheiden." % fehler_ausschnitt(text))
     if "<html" in kleine or "<!doctype" in kleine:
         return ("Es kam HTML statt JSON zurueck - geantwortet hat also ein vorgelagerter Dienst "
                 "(Proxy, Portal, Fehlerseite), nicht die Anker-Schnittstelle. "
