@@ -907,6 +907,26 @@ def praefix_gueltig(s) -> bool:
     return not s.startswith("/") and not s.endswith("/") and "//" not in s
 
 
+def _haus_bereiche():
+    """0.9.49 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): das gemeinsame
+    Modul haus_bereiche.py neben dem Dienst, beim ersten Aufruf geladen."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    if hier not in sys.path:
+        sys.path.insert(0, hier)
+    import haus_bereiche  # noqa: E402
+    return haus_bereiche
+
+
+def praefix_haus_melden(praefix):
+    """0.9.49: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter
+    haus/ faellt; der Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder ""."""
+    hb = _haus_bereiche()
+    bereich = hb.hb_melden_faellig(praefix)
+    if bereich:
+        _LOG.warning("%s", hb.hb_logtext(praefix, bereich))
+    return bereich
+
+
 def mqtt_ausgeben(lox: dict, cfg: dict, ok: int) -> None:
     """Werte veroeffentlichen - mit Zeitstempel, und bei einem Fehlschlag nur
     die Stoermeldung.
@@ -927,6 +947,7 @@ def mqtt_ausgeben(lox: dict, cfg: dict, ok: int) -> None:
     # Ein ungueltiges Praefix faellt nicht still auf "ankersolix" zurueck
     # (Befund MQTT M6): gemeldet wird, gesendet nicht.
     praefix = cfg.get("mqtt_topic")
+    praefix_haus_melden(praefix)   # 0.9.49: im gemeinsamen Bereich? melden, nicht anhalten
     if not praefix_gueltig(praefix):
         melde_gebremst("mqtt_praefix", f"MQTT: das Themen-Praefix {praefix!r} ist ungueltig - "
                                        "nichts gesendet. Bitte im Reiter MQTT berichtigen.")
@@ -2901,7 +2922,8 @@ async def _dienst_lauf(einmal: bool, freigeben: bool, frist, z: dict, leser) -> 
                 melde_gebremst("abruf", f"Abruf unvollstaendig: {fehler}", 900)
 
             abbild_schreiben(api, cfg, ok, fehler, zusatz)
-            zustand_schreiben(ok=ok, fehler=fehler, zyklus=zyklus, fehler_folge=fehler_folge,
+            zustand_schreiben(haus_bereiche=list(_haus_bereiche().HB_BEREICHE),   # 0.9.49
+                              ok=ok, fehler=fehler, zyklus=zyklus, fehler_folge=fehler_folge,
                               pid=os.getpid(), intervall=cfg["intervall"])
             # E-E5: das Lebenszeichen einmal direkt nach jedem Abbild ...
             lebenszeichen_senden(cfg, erzwingen=True, leser=leser)

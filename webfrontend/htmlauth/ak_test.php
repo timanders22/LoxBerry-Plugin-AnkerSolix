@@ -324,6 +324,9 @@ function ak_pruefungen()
      * Abnehmer haus/strompreis (V2b), paho-Fassung (N10), Befehlsbruecke (V1), Lesezweig (E-E21). */
     list($stand, $text) = ak_lebenszeichen_abgleich($cfg);
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_LEBEN'), $text);
+    // 0.9.49: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $ak_hb = ak_pruef_praefix_haus($cfg);
+    $zeilen[] = ak_pruefzeile($ak_hb[0], ak_e(ak_t('HAUSBEREICH.F_TEST')), $ak_hb[1]);
     list($stand, $text) = ak_monat_abgleich();
     $zeilen[] = ak_pruefzeile($stand, ak_t('TEST.F_MONAT'), $text);
     list($stand, $text) = ak_preis_lage($cfg);

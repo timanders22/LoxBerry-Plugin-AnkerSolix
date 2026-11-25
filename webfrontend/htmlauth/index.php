@@ -422,6 +422,14 @@ if ($ak_post && isset($_POST['save_mqtt'])) {
         $ak_fehler[] = ak_t('EINST.FEHLER_TOPIC');
         $ak_eingaben_form = 'mqtt';
         $ak_beanstandet[] = 'mqtt_topic';
+    } elseif (hb_bereich($ak_topic) !== '' && $ak_topic !== (string) $ak_cfg['mqtt_topic']) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        /* 0.9.49 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        $ak_fehler[] = sprintf(ak_t('HAUSBEREICH.FEHLER'), ak_e($ak_topic), ak_e(hb_bereich($ak_topic)));
+        $ak_eingaben_form = 'mqtt';
+        $ak_beanstandet[] = 'mqtt_topic';
     } else {
         $ak_cfg['mqtt_topic'] = $ak_topic;
     }
@@ -454,6 +462,12 @@ if ($ak_post && isset($_POST['save_endpunkt'])) {
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
 /* 0.9.35: Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+/* 0.9.49: Testmeldung an SignalBot (Knopf unter den Sprachansagen) - wie die Testansage darunter. */
+if ($ak_post && isset($_POST['meld_test'])) {
+    list($ak_at, $ak_ag) = ak_meld_test();
+    if ($ak_at) { $ak_meldungen[] = ak_e(ak_t('SIGNALMELDUNG.T_OK')); } else { $ak_fehler[] = ak_e($ak_ag); }
+    $ak_tab = 'tab-settings';
+}
 if ($ak_post && isset($_POST['ansage_test'])) {
     list($ak_at, $ak_ag) = ak_ansage_test();
     if ($ak_at) { $ak_meldungen[] = ak_e(ak_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $ak_fehler[] = ak_e(ak_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $ak_ag); }
